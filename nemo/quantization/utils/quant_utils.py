@@ -53,6 +53,7 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     zero_pint: shift for quantization
     """
 
+    '''
     # reshape scale and zeropoint for convolutional weights and activation
     if len(input.shape) == 4:
         scale = scale.view(-1, 1, 1, 1)
@@ -64,7 +65,7 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     else:
         scale = scale.view(-1)
         zero_point = zero_point.view(-1)
-    # quantized = float / scale + zero_point
+    '''
     if inplace:
         input.mul_(1. / scale).add_(zero_point).round_()
         return input

@@ -102,8 +102,8 @@ class QuantAct(Module):
                     x_min = x_act.data.min()
                     x_max = x_act.data.max()
                 else:
-                    x_min = x_act.data.min(axis=0).values.min(axis=0).values
-                    x_max = x_act.data.max(axis=0).values.max(axis=0).values
+                    x_min = x_act.data.min(axis=0).values.min(axis=-1).values
+                    x_max = x_act.data.max(axis=0).values.max(axis=-1).values
             else:
                 raise NotImplementedError("percentile mode is not currently supported.")
 
@@ -132,9 +132,16 @@ class QuantAct(Module):
         x_min = self.x_min if specified_min is None else specified_min
         x_max = self.x_max if specified_max is None else specified_max
 
+        x_min = x_min.view(1, -1, 1)
+        x_max = x_max.view(1, -1, 1)
+
         self.act_scaling_factor = symmetric_linear_quantization_params(
             self.activation_bit, x_min, x_max, 
             per_channel=self.per_channel)
+
+        #print(x_min.shape)
+        #print(self.act_scaling_factor.shape)
+        #print(x.shape)
 
         if pre_act_scaling_factor is None:
             # this is for the input quantization 
@@ -147,8 +154,12 @@ class QuantAct(Module):
                     self.act_scaling_factor, 
                     identity, identity_scaling_factor)
 
-        correct_output_scale = self.act_scaling_factor.view(-1)
+        correct_output_scale = self.act_scaling_factor
+        #print(quant_act_int.shape)
 
+        #print(((quant_act_int * correct_output_scale - x)).abs().max())
+        #print(x.abs().max())
+        #print()
         return quant_act_int * correct_output_scale, self.act_scaling_factor
 
 class QuantConv1d(Module):
@@ -168,6 +179,7 @@ class QuantConv1d(Module):
         self.quantize_bias = False if bias_bit is None else True
         self.quant_mode = quant_mode
         self.counter = 1
+        self.percentile_mode = False
 
         if self.quant_mode == "symmetric":
             self.weight_function = SymmetricQuantFunction.apply
@@ -188,8 +200,7 @@ class QuantConv1d(Module):
             self.bias = None
             self.bias_integer = None
         self.register_buffer('weight_integer', torch.zeros_like(self.weight))
-        self.register_buffer('convbn_scaling_factor', torch.zeros(self.out_channels))
-        print(self.weight.shape)
+        self.register_buffer('conv_scaling_factor', torch.zeros(self.out_channels))
 
     def fix(self):
         """
@@ -213,7 +224,31 @@ class QuantConv1d(Module):
                     stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
         
         assert self.quant_mode == 'symmetric'
-        raise NotImplementedError
+
+        w_transform = self.weight.data.detach()
+        if self.per_channel:
+            w_min, _ = torch.min(w_transform, dim=-1, out=None, keepdim=True)
+            w_max, _ = torch.max(w_transform, dim=-1, out=None, keepdim=True)
+        else:
+            w_min = w_transform.min().view(1, 1, 1)
+            w_max = w_transform.max().view(1, 1, 1)
+
+        #print('w, w_max :', w_transform.shape, w_max.shape)
+
+        self.conv_scaling_factor = symmetric_linear_quantization_params(
+                self.weight_bit, w_min, w_max, self.per_channel)
+        #print('scaling factor', self.conv_scaling_factor.shape)
+
+        self.weight_integer = self.weight_function(
+                self.weight, self.weight_bit, self.percentile_mode, 
+                self.conv_scaling_factor)
+
+        #print(self.weight.abs().max())
+        #print((self.weight - self.weight_integer * self.conv_scaling_factor).abs().max())
+        #print()
+
+        return F.conv1d(x, weight=self.weight, bias=self.bias, 
+                stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
 
 class QuantBnConv2d(Module):
