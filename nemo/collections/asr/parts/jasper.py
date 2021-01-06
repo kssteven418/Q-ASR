@@ -414,6 +414,7 @@ class JasperBlock(nn.Module):
         self.res_act =  QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
         self.mout = nn.Sequential(*self._get_act_dropout_layer(drop_prob=dropout, activation=activation))
 
+
     def bn_folding(self):
         def _folding(layers, l):
             if isinstance(l, nn.BatchNorm1d):
@@ -422,15 +423,23 @@ class JasperBlock(nn.Module):
             else:
                 layers.append(l)
 
-        #print(self.mconv)
         conv = nn.ModuleList()
 
         if self.mconv is not None:
             for l in self.mconv:
                 _folding(conv, l)
-        #print(conv)
-        #print()
+
         self.mconv = conv
+
+        if self.res is not None:
+            assert len(self.res) == 1
+            res = nn.ModuleList()
+            res_list = nn.ModuleList()
+            for l in self.res[0]:
+                _folding(res_list, l)
+            res.append(res_list)
+            self.res = res
+
 
     def _get_conv(
         self,
@@ -608,9 +617,7 @@ class JasperBlock(nn.Module):
 
         # compute the output
         out = self.mout(out)
-        for l in self.mout:
-            #print('out', l)
-            pass
+
         if self.res is not None and self.dense_residual:
             return xs + [out], lens
 
