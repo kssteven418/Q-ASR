@@ -269,6 +269,7 @@ class QuantConv1d(Module):
                 stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
+        #print(self.conv_scaling_factor.shape, pre_act_scaling_factor.shape, correct_scaling_factor.shape)
         '''
         print(temp.abs().max())
         print((temp - conv_int * correct_scaling_factor).abs().max())
@@ -293,7 +294,6 @@ class QuantConv1d(Module):
         print()
         '''
         return conv_int * correct_scaling_factor, correct_scaling_factor
-        return temp
 
 
 class QuantBnConv2d(Module):

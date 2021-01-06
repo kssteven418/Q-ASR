@@ -186,10 +186,12 @@ class ConvASREncoder(NeuralModule, Exportable):
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
     @typecheck()
-    def forward(self, audio_signal, length=None):
+    def forward(self, audio_signal, length=None, audio_signal_scaling_factor=None):
         s_input, length = [audio_signal], length
+        s_input_scaling_factor = audio_signal_scaling_factor
         for layer in self.encoder_layers:
-            s_input, length = layer((s_input, length))
+            s_input, length, s_input_scaling_factor = \
+                    layer((s_input, length), s_input_scaling_factor)
         if length is None:
             return s_input[-1]
 
