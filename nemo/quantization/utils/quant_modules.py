@@ -139,10 +139,6 @@ class QuantAct(Module):
             self.activation_bit, x_min, x_max, 
             per_channel=self.per_channel)
 
-        #print(x_min.shape)
-        #print(self.act_scaling_factor.shape)
-        #print(x.shape)
-
         if pre_act_scaling_factor is None:
             # this is for the input quantization 
             quant_act_int = self.act_function(x, self.activation_bit, \
@@ -160,12 +156,9 @@ class QuantAct(Module):
                 identity, identity_scaling_factor)
 
         correct_output_scale = self.act_scaling_factor
-        #print(quant_act_int.shape)
 
-        #print(((quant_act_int * correct_output_scale - x)).abs().max())
-        #print(x.abs().max())
-        #print()
         return quant_act_int * correct_output_scale, self.act_scaling_factor
+
 
 class QuantConv1d(Module):
     def __init__(self,
@@ -253,7 +246,6 @@ class QuantConv1d(Module):
                 w_min = w_transform.min()
                 w_max = w_transform.max()
 
-            #print('w, w_max :', w_transform.shape, w_max.shape)
             w_min = w_min.view(-1, 1, 1)
             w_max = w_max.view(-1, 1, 1)
 
@@ -299,15 +291,14 @@ class QuantConv1d(Module):
         running_std = torch.sqrt(self.bn.running_var.detach() + self.bn.eps)
         scale_factor = self.bn.weight / running_std
         scaled_weight = self.weight * scale_factor.reshape([-1, 1, 1])
-        #print(scale_factor.shape)
-        #print(self.weight.shape)
-        #print(scaled_weight.shape)
+
         if self.bias is not None:
             scaled_bias = self.bias
         else:
             scaled_bias = torch.zeros_like(self.bn.running_mean)
         scaled_bias = (scaled_bias - self.bn.running_mean.detach()) * scale_factor + self.bn.bias
 
+        # TODO: do refactoring 
         w_transform = scaled_weight.data.detach()
         if self.per_channel:
             w_min, _ = torch.min(w_transform, dim=-1, out=None)
@@ -318,13 +309,11 @@ class QuantConv1d(Module):
             w_min = w_transform.min()
             w_max = w_transform.max()
 
-        #print('w, w_max :', w_transform.shape, w_max.shape)
         w_min = w_min.view(-1, 1, 1)
         w_max = w_max.view(-1, 1, 1)
 
         self.conv_scaling_factor = symmetric_linear_quantization_params(
                 self.weight_bit, w_min, w_max, self.per_channel)
-        #print(self.conv_scaling_factor.shape)
 
         self.weight_integer = self.weight_function(
                 scaled_weight, self.weight_bit, self.percentile_mode, 
@@ -346,6 +335,113 @@ class QuantConv1d(Module):
         return conv_output, correct_scaling_factor
 
 
+
+class QuantLinear(Module):
+    """
+    Class to quantize weights of given Linear layer
+    
+    Parameters:
+    ----------
+    weight_bit : int
+        Bitwidth for quantized weights.
+    bias_bit : int, default None
+        Bitwidth for quantized bias.
+    per_channel : bool, default False
+        Whether to use channel-wise quantization.
+    quant_mode : 'none' or 'symmetric', default 'none'
+        The mode for quantization. 'none' for no quantization.
+    """
+    def __init__(self,
+                 weight_bit,
+                 bias_bit=None,
+                 per_channel=False,
+                 quant_mode='none'):
+        super(QuantLinear, self).__init__()
+        self.weight_bit = weight_bit
+        self.quant_mode = quant_mode
+        self.per_channel = per_channel
+        self.bias_bit = bias_bit
+        self.quantize_bias = (False if bias_bit is None else True)
+        self.quant_mode = quant_mode
+        self.percentile_mode = False
+
+        if self.quant_mode == "none":
+            pass
+        elif self.quant_mode == "symmetric":
+            self.weight_function = SymmetricQuantFunction.apply
+        elif self.quant_mode == "asymmetric":
+            raise NotImplementedError("unsupported quant mode: {}".format(quant_mode))
+        else:
+            raise ValueError("unknown quant mode: {}".format(self.quant_mode))
+
+    def __repr__(self):
+        s = super(QuantLinear, self).__repr__()
+        s = "(" + s + " weight_bit={}, quant_mode={})".format(
+            self.weight_bit, self.quant_mode)
+        return s
+
+    def set_param(self, linear):
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
+        self.weight = Parameter(linear.weight.data.clone())
+        self.register_buffer('fc_scaling_factor', torch.zeros(self.out_features))
+        self.register_buffer('weight_integer', torch.zeros_like(self.weight))
+        try:
+            self.bias = Parameter(linear.bias.data.clone())
+        except AttributeError:
+            self.bias = None
+        self.register_buffer('bias_integer', torch.zeros_like(self.bias))
+
+    def fix(self):
+        pass
+
+    def unfix(self):
+        pass
+
+    def forward(self, x, prev_act_scaling_factor=None):
+        """
+        using quantized weights to forward activation x
+        """
+        if self.quant_mode == 'none':
+            return F.linear(x, weight=self.weight, bias=self.bias), None
+
+    	# x / prev_act_scaling_factor = int
+        assert self.quant_mode == 'symmetric', \
+                "unsupported quant mode: {}".format(quant_mode)
+
+        # assert that prev_act_scaling_factor is a scalar tensor
+        # e.g. all input tensors have the same scalar factor
+        assert prev_act_scaling_factor is not None and \
+              prev_act_scaling_factor.shape == (1,) 
+
+        w = self.weight
+        w_transform = w.data.detach()
+        if self.per_channel:
+            w_min, _ = torch.min(w_transform, dim=1, out=None)
+            w_max, _ = torch.max(w_transform, dim=1, out=None)
+        else:
+            w_min = w_transform.min().expand(1)
+            w_max = w_transform.max().expand(1)
+
+        self.fc_scaling_factor = symmetric_linear_quantization_params(
+                self.weight_bit, w_min, w_max, self.per_channel)
+        self.weight_integer = self.weight_function(
+                self.weight, self.weight_bit, self.percentile_mode, 
+                self.fc_scaling_factor)
+
+        bias_scaling_factor = self.fc_scaling_factor * prev_act_scaling_factor
+
+        self.bias_integer = self.weight_function(self.bias, 
+                self.bias_bit, False, bias_scaling_factor)
+
+        prev_act_scaling_factor = prev_act_scaling_factor.view(1, -1)
+        x_int = x / prev_act_scaling_factor
+
+        return F.linear(x_int, weight=self.weight_integer, bias=self.bias_integer) \
+                * bias_scaling_factor, bias_scaling_factor
+
+
+'''
 class QuantBnConv2d(Module):
     """
     Class to quantize given convolutional layer weights, with support for both folded BN and separate BN.
@@ -532,112 +628,6 @@ class QuantBnConv2d(Module):
                              self.conv.dilation, self.conv.groups) * correct_output_scale, self.convbn_scaling_factor)
 
 
-
-class QuantLinear(Module):
-    """
-    Class to quantize weights of given Linear layer
-    
-    Parameters:
-    ----------
-    weight_bit : int
-        Bitwidth for quantized weights.
-    bias_bit : int, default None
-        Bitwidth for quantized bias.
-    per_channel : bool, default False
-        Whether to use channel-wise quantization.
-    quant_mode : 'none' or 'symmetric', default 'none'
-        The mode for quantization. 'none' for no quantization.
-    """
-    def __init__(self,
-                 weight_bit,
-                 bias_bit=None,
-                 per_channel=False,
-                 quant_mode='none'):
-        super(QuantLinear, self).__init__()
-        self.weight_bit = weight_bit
-        self.quant_mode = quant_mode
-        self.per_channel = per_channel
-        self.bias_bit = bias_bit
-        self.quantize_bias = (False if bias_bit is None else True)
-        self.quant_mode = quant_mode
-        self.percentile_mode = False
-
-        if self.quant_mode == "none":
-            pass
-        elif self.quant_mode == "symmetric":
-            self.weight_function = SymmetricQuantFunction.apply
-        elif self.quant_mode == "asymmetric":
-            raise NotImplementedError("unsupported quant mode: {}".format(quant_mode))
-        else:
-            raise ValueError("unknown quant mode: {}".format(self.quant_mode))
-
-    def __repr__(self):
-        s = super(QuantLinear, self).__repr__()
-        s = "(" + s + " weight_bit={}, quant_mode={})".format(
-            self.weight_bit, self.quant_mode)
-        return s
-
-    def set_param(self, linear):
-        self.in_features = linear.in_features
-        self.out_features = linear.out_features
-        self.weight = Parameter(linear.weight.data.clone())
-        self.register_buffer('fc_scaling_factor', torch.zeros(self.out_features))
-        self.register_buffer('weight_integer', torch.zeros_like(self.weight))
-        try:
-            self.bias = Parameter(linear.bias.data.clone())
-        except AttributeError:
-            self.bias = None
-        self.register_buffer('bias_integer', torch.zeros_like(self.bias))
-
-    def fix(self):
-        pass
-
-    def unfix(self):
-        pass
-
-    def forward(self, x, prev_act_scaling_factor=None):
-        """
-        using quantized weights to forward activation x
-        """
-        if self.quant_mode == 'none':
-            return F.linear(x, weight=self.weight, bias=self.bias), None
-
-    	# x / prev_act_scaling_factor = int
-        assert self.quant_mode == 'symmetric', \
-                "unsupported quant mode: {}".format(quant_mode)
-
-        # assert that prev_act_scaling_factor is a scalar tensor
-        # e.g. all input tensors have the same scalar factor
-        assert prev_act_scaling_factor is not None and \
-              prev_act_scaling_factor.shape == (1,) 
-
-        w = self.weight
-        w_transform = w.data.detach()
-        if self.per_channel:
-            w_min, _ = torch.min(w_transform, dim=1, out=None)
-            w_max, _ = torch.max(w_transform, dim=1, out=None)
-        else:
-            w_min = w_transform.min().expand(1)
-            w_max = w_transform.max().expand(1)
-
-        self.fc_scaling_factor = symmetric_linear_quantization_params(
-                self.weight_bit, w_min, w_max, self.per_channel)
-        self.weight_integer = self.weight_function(
-                self.weight, self.weight_bit, self.percentile_mode, 
-                self.fc_scaling_factor)
-
-        bias_scaling_factor = self.fc_scaling_factor * prev_act_scaling_factor
-
-        self.bias_integer = self.weight_function(self.bias, 
-                self.bias_bit, False, bias_scaling_factor)
-
-        prev_act_scaling_factor = prev_act_scaling_factor.view(1, -1)
-        x_int = x / prev_act_scaling_factor
-
-        return F.linear(x_int, weight=self.weight_integer, bias=self.bias_integer) \
-                * bias_scaling_factor, bias_scaling_factor
-
-'''
 class QuantEmbedding(Module):
     """
     Class to quantize given Embedding layer
