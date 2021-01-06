@@ -219,6 +219,44 @@ class QuantConv1d(Module):
     def bn_folding(self, bn):
         self.bn = bn
 
+    def int_conv(self, weight, bias, x, pre_act_scaling_factor):
+        if self.per_channel:
+            w_min, _ = torch.min(weight, dim=-1, out=None)
+            w_max, _ = torch.max(weight, dim=-1, out=None)
+            w_min, _ = torch.min(w_min, dim=-1, out=None)
+            w_max, _ = torch.max(w_max, dim=-1, out=None)
+        else:
+            w_min = weight.min()
+            w_max = weight.max()
+
+        w_min = w_min.view(-1, 1, 1)
+        w_max = w_max.view(-1, 1, 1)
+
+        self.conv_scaling_factor = symmetric_linear_quantization_params(
+                self.weight_bit, w_min, w_max, self.per_channel)
+
+        self.weight_integer = self.weight_function(
+                weight, self.weight_bit, self.percentile_mode, self.conv_scaling_factor)
+
+        bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
+
+        if bias is not None:
+            # self.bias_integer?
+            bias_integer = self.weight_function(bias, 
+                self.bias_bit, self.percentile_mode, bias_scaling_factor.reshape([-1])).type(torch.double)
+        else:
+            bias_integer = None
+
+        x_int = (x / pre_act_scaling_factor).type(torch.double)
+        w_int = self.weight_integer.type(torch.double)
+
+        conv_int = F.conv1d(x_int, weight=w_int, bias=bias_integer,
+                stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
+
+        correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
+        conv_output = conv_int * correct_scaling_factor
+        return conv_output, correct_scaling_factor
+
     def forward(self, x, pre_act_scaling_factor=None):
         """
         x: the input activation
@@ -236,40 +274,9 @@ class QuantConv1d(Module):
 
         if self.bn is None or not self.fix_bn :
 
-            w_transform = self.weight.data.detach()
-            if self.per_channel:
-                w_min, _ = torch.min(w_transform, dim=-1, out=None)
-                w_max, _ = torch.max(w_transform, dim=-1, out=None)
-                w_min, _ = torch.min(w_min, dim=-1, out=None)
-                w_max, _ = torch.max(w_max, dim=-1, out=None)
-            else:
-                w_min = w_transform.min()
-                w_max = w_transform.max()
-
-            w_min = w_min.view(-1, 1, 1)
-            w_max = w_max.view(-1, 1, 1)
-
-            self.conv_scaling_factor = symmetric_linear_quantization_params(
-                    self.weight_bit, w_min, w_max, self.per_channel)
-
-            self.weight_integer = self.weight_function(
-                    self.weight, self.weight_bit, self.percentile_mode, 
-                    self.conv_scaling_factor)
-
-            bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
-
-            if self.bias is not None:
-                self.bias_integer = self.weight_function(self.bias, 
-                    self.bias_bit, self.percentile_mode, bias_scaling_factor.reshape([-1])).type(torch.double)
-
-            x_int = (x / pre_act_scaling_factor).type(torch.double)
-            w_int = self.weight_integer.type(torch.double)
-
-            conv_int = F.conv1d(x_int, weight=w_int, bias=self.bias_integer,
-                    stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
-
-            correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
-            conv_output = conv_int * correct_scaling_factor
+            weight = self.weight.data.detach()
+            bias = None if self.bias is None else self.bias.data.detach()
+            conv_output, correct_scaling_factor = self.int_conv(weight, bias, x, pre_act_scaling_factor)
             
             if self.bn is None:
                 return conv_output, correct_scaling_factor
@@ -299,38 +306,9 @@ class QuantConv1d(Module):
         scaled_bias = (scaled_bias - self.bn.running_mean.detach()) * scale_factor + self.bn.bias
 
         # TODO: do refactoring 
-        w_transform = scaled_weight.data.detach()
-        if self.per_channel:
-            w_min, _ = torch.min(w_transform, dim=-1, out=None)
-            w_max, _ = torch.max(w_transform, dim=-1, out=None)
-            w_min, _ = torch.min(w_min, dim=-1, out=None)
-            w_max, _ = torch.max(w_max, dim=-1, out=None)
-        else:
-            w_min = w_transform.min()
-            w_max = w_transform.max()
-
-        w_min = w_min.view(-1, 1, 1)
-        w_max = w_max.view(-1, 1, 1)
-
-        self.conv_scaling_factor = symmetric_linear_quantization_params(
-                self.weight_bit, w_min, w_max, self.per_channel)
-
-        self.weight_integer = self.weight_function(
-                scaled_weight, self.weight_bit, self.percentile_mode, 
-                self.conv_scaling_factor)
-
-        bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
-        bias_integer = self.weight_function(scaled_bias, 
-            self.bias_bit, self.percentile_mode, bias_scaling_factor.reshape([-1])).type(torch.double)
-
-        x_int = (x / pre_act_scaling_factor).type(torch.double)
-        w_int = self.weight_integer.type(torch.double)
-
-        conv_int = F.conv1d(x_int, weight=w_int, bias=bias_integer,
-                stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
-
-        correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
-        conv_output = conv_int * correct_scaling_factor
+        weight = scaled_weight.data.detach()
+        bias = scaled_bias.data.detach()
+        conv_output, correct_scaling_factor = self.int_conv(weight, bias, x, pre_act_scaling_factor)
         
         return conv_output, correct_scaling_factor
 
