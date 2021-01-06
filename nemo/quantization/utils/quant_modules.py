@@ -174,6 +174,7 @@ class QuantConv1d(Module):
                  quant_mode='none',
                  per_channel=False,
                  fix_flag=False,
+                 fix_bn = False,
                  weight_percentile=0):
         super(QuantConv1d, self).__init__()
         self.weight_bit = weight_bit
@@ -185,6 +186,7 @@ class QuantConv1d(Module):
         self.quant_mode = quant_mode
         self.counter = 1
         self.percentile_mode = False
+        self.fix_bn = fix_bn
 
         if self.quant_mode == "symmetric":
             self.weight_function = SymmetricQuantFunction.apply
@@ -213,13 +215,13 @@ class QuantConv1d(Module):
         """
         fix the BN statistics by setting fix_BN to True
         """
-        pass
+        self.fix_bn = True
 
     def unfix(self):
         """
         change the mode (fixed or not) of BN statistics to its original status
         """
-        pass
+        self.fix_bn = False
 
     def bn_folding(self, bn):
         self.bn = bn
@@ -230,7 +232,7 @@ class QuantConv1d(Module):
         pre_act_scaling_factor: the scaling factor of the previous activation quantization layer
         """
         if self.quant_mode == 'none':
-            conv =  F.conv1d(x, weight=self.weight, bias=self.bias, 
+            conv = F.conv1d(x, weight=self.weight, bias=self.bias, 
                     stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
             if self.bn is not None:
@@ -239,53 +241,62 @@ class QuantConv1d(Module):
         
         assert self.quant_mode == 'symmetric'
 
-        w_transform = self.weight.data.detach()
-        if self.per_channel:
-            w_min, _ = torch.min(w_transform, dim=-1, out=None)
-            w_max, _ = torch.max(w_transform, dim=-1, out=None)
-            w_min, _ = torch.min(w_min, dim=-1, out=None)
-            w_max, _ = torch.max(w_max, dim=-1, out=None)
-        else:
-            w_min = w_transform.min()
-            w_max = w_transform.max()
+        if self.bn is None or not self.fix_bn :
 
-        #print('w, w_max :', w_transform.shape, w_max.shape)
-        w_min = w_min.view(-1, 1, 1)
-        w_max = w_max.view(-1, 1, 1)
+            w_transform = self.weight.data.detach()
+            if self.per_channel:
+                w_min, _ = torch.min(w_transform, dim=-1, out=None)
+                w_max, _ = torch.max(w_transform, dim=-1, out=None)
+                w_min, _ = torch.min(w_min, dim=-1, out=None)
+                w_max, _ = torch.max(w_max, dim=-1, out=None)
+            else:
+                w_min = w_transform.min()
+                w_max = w_transform.max()
 
-        self.conv_scaling_factor = symmetric_linear_quantization_params(
-                self.weight_bit, w_min, w_max, self.per_channel)
+            #print('w, w_max :', w_transform.shape, w_max.shape)
+            w_min = w_min.view(-1, 1, 1)
+            w_max = w_max.view(-1, 1, 1)
 
-        self.weight_integer = self.weight_function(
-                self.weight, self.weight_bit, self.percentile_mode, 
-                self.conv_scaling_factor)
+            self.conv_scaling_factor = symmetric_linear_quantization_params(
+                    self.weight_bit, w_min, w_max, self.per_channel)
 
-        bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
+            self.weight_integer = self.weight_function(
+                    self.weight, self.weight_bit, self.percentile_mode, 
+                    self.conv_scaling_factor)
 
-        if self.bias:
-            self.bias_integer = self.weight_function(self.bias, 
-                self.bias_bit, self.percentile_mode, bias_scaling_factor)
+            bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
 
-        x_int = (x / pre_act_scaling_factor).type(torch.double)
-        w_int = self.weight_integer.type(torch.double)
+            if self.bias:
+                self.bias_integer = self.weight_function(self.bias, 
+                    self.bias_bit, self.percentile_mode, bias_scaling_factor)
 
-        conv_int = F.conv1d(x_int, weight=w_int, bias=self.bias_integer,
-                stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
-        #print('after', conv_int.dtype)
+            x_int = (x / pre_act_scaling_factor).type(torch.double)
+            w_int = self.weight_integer.type(torch.double)
 
-        #print(self.weight.abs().max())
-        #print((self.weight - self.weight_integer * self.conv_scaling_factor).abs().max())
-        #print()
+            conv_int = F.conv1d(x_int, weight=w_int, bias=self.bias_integer,
+                    stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
 
-        temp = F.conv1d(x, weight=self.weight, bias=self.bias, 
-                stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
+            correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
+            conv_output = conv_int * correct_scaling_factor
+            
+            if self.bn is None:
+                return conv_output, correct_scaling_factor
+            
+            assert self.bn is not None and not self.fix_bn
+            batch_mean = torch.mean(conv_output, dim=(0, 2))
+            batch_var = torch.var(conv_output, dim=(0, 2))
 
-        correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
+            # update running mean and vairance
+            self.bn.running_mean = self.bn.running_mean.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_mean
+            self.bn.running_var = self.bn.running_var.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_var
 
-        if self.bn is not None:
-            return self.bn(conv_int * correct_scaling_factor), None
+            output_factor = self.bn.weight.view(1, -1, 1) / torch.sqrt(self.bn.running_var + self.bn.eps).view(1, -1, 1)
+            output = output_factor * (conv_output - self.bn.running_mean.view(1, -1, 1)) + self.bn.bias.view(1, -1, 1)
 
-        return conv_int * correct_scaling_factor, correct_scaling_factor
+            return output, output_factor * correct_scaling_factor
+
+        assert self.bn is not None and self.fix_bn
+        print(a)
 
 
 class QuantBnConv2d(Module):

@@ -422,14 +422,14 @@ class JasperBlock(nn.Module):
             else:
                 layers.append(l)
 
-        print(self.mconv)
+        #print(self.mconv)
         conv = nn.ModuleList()
 
         if self.mconv is not None:
             for l in self.mconv:
                 _folding(conv, l)
-        print(conv)
-        print()
+        #print(conv)
+        #print()
         self.mconv = conv
 
     def _get_conv(
