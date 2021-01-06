@@ -128,8 +128,10 @@ class MaskedConv1d(nn.Module):
         heads=-1,
         bias=False,
         use_mask=True,
+        quant_mode='none',
     ):
         super(MaskedConv1d, self).__init__()
+        self.quant_mode = quant_mode
 
         if not (heads == -1 or groups == in_channels):
             raise ValueError("Only use heads for depthwise convolutions")
@@ -150,8 +152,8 @@ class MaskedConv1d(nn.Module):
             groups=groups,
             bias=bias,
         )
-        self.act = QuantAct(8, quant_mode='symmetric', per_channel=False, channel_len=in_channels)
-        self.conv = QuantConv1d(8, bias_bit=32, quant_mode='symmetric', per_channel=True)
+        self.act = QuantAct(8, quant_mode=self.quant_mode, per_channel=False, channel_len=in_channels)
+        self.conv = QuantConv1d(8, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
         self.conv.set_param(conv)
 
         self.use_mask = use_mask
@@ -170,7 +172,6 @@ class MaskedConv1d(nn.Module):
             x = x.masked_fill(mask.unsqueeze(1).to(device=x.device), 0)
             # del mask
             lens = self.get_seq_len(lens)
-
         sh = x.shape
         if self.heads != -1:
             x = x.view(-1, self.heads, sh[-1])
@@ -291,6 +292,7 @@ class JasperBlock(nn.Module):
         se_context_window=None,
         se_interpolation_mode='nearest',
         stride_last=False,
+        quant_mode='none', 
     ):
         super(JasperBlock, self).__init__()
 
@@ -308,12 +310,13 @@ class JasperBlock(nn.Module):
         self.separable = separable
         self.residual_mode = residual_mode
         self.se = se
+        self.quant_mode = quant_mode
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
 
         for i in range(repeat - 1):
-            print(i, activation)
+            #print(i, activation)
             # Stride last means only the last convolution in block will have stride
             if stride_last:
                 stride_val = [1]
@@ -333,6 +336,7 @@ class JasperBlock(nn.Module):
                     separable=separable,
                     normalization=normalization,
                     norm_groups=norm_groups,
+                    quant_mode=quant_mode,
                 )
             )
 
@@ -353,10 +357,12 @@ class JasperBlock(nn.Module):
                 separable=separable,
                 normalization=normalization,
                 norm_groups=norm_groups,
+                    quant_mode=quant_mode,
             )
         )
 
         if se:
+            assert quant_mode == 'none', 'SqueezeExcite does not currently support quantization'
             conv.append(
                 SqueezeExcite(
                     planes,
@@ -415,6 +421,7 @@ class JasperBlock(nn.Module):
         groups=1,
         heads=-1,
         separable=False,
+        quant_mode='none',
     ):
         use_mask = self.conv_mask
         print('mask', self.conv_mask)
@@ -430,8 +437,10 @@ class JasperBlock(nn.Module):
                 groups=groups,
                 heads=heads,
                 use_mask=use_mask,
+                quant_mode=quant_mode,
             )
         else:
+            assert quant_mode == 'none', 'Quantization mode only supports convolution with mask currently.'
             return nn.Conv1d(
                 in_channels,
                 out_channels,
@@ -457,6 +466,7 @@ class JasperBlock(nn.Module):
         separable=False,
         normalization="batch",
         norm_groups=1,
+        quant_mode='none',
     ):
         print('separable', separable, 'normalization', normalization, 'groups', groups)
         if norm_groups == -1:
@@ -474,6 +484,7 @@ class JasperBlock(nn.Module):
                     bias=bias,
                     groups=in_channels,
                     heads=heads,
+                    quant_mode=quant_mode,
                 ),
                 self._get_conv(
                     in_channels,
@@ -484,6 +495,7 @@ class JasperBlock(nn.Module):
                     padding=0,
                     bias=bias,
                     groups=groups,
+                    quant_mode=quant_mode,
                 ),
             ]
         else:
@@ -497,6 +509,7 @@ class JasperBlock(nn.Module):
                     padding=padding,
                     bias=bias,
                     groups=groups,
+                    quant_mode=quant_mode,
                 )
             ]
 
@@ -523,7 +536,7 @@ class JasperBlock(nn.Module):
         layers = [activation, nn.Dropout(p=drop_prob)]
         return layers
 
-    def forward(self, input_: Tuple[List[Tensor], Optional[Tensor]]):
+    def forward(self, input_: Tuple[List[Tensor], Optional[Tensor]], scaling_factor=None):
         # type: (Tuple[List[Tensor], Optional[Tensor]]) -> Tuple[List[Tensor], Optional[Tensor]] # nopep8
         lens_orig = None
         xs = input_[0]

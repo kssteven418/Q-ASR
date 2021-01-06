@@ -222,7 +222,7 @@ class QuantConv1d(Module):
         """
         if self.quant_mode == 'none':
             return F.conv1d(x, weight=self.weight, bias=self.bias, 
-                    stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
+                    stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups), None
         
         assert self.quant_mode == 'symmetric'
 

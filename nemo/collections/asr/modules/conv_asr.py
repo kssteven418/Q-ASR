@@ -118,6 +118,7 @@ class ConvASREncoder(NeuralModule, Exportable):
         conv_mask: bool = True,
         frame_splicing: int = 1,
         init_mode: Optional[str] = 'xavier_uniform',
+        quant_mode: Optional[str] = 'none',
     ):
         super().__init__()
         if isinstance(jasper, ListConfig):
@@ -127,6 +128,7 @@ class ConvASREncoder(NeuralModule, Exportable):
         feat_in = feat_in * frame_splicing
 
         self._feat_in = feat_in
+        self.quant_mode = quant_mode
 
         residual_panes = []
         encoder_layers = []
@@ -172,18 +174,22 @@ class ConvASREncoder(NeuralModule, Exportable):
                     se_interpolation_mode=se_interpolation_mode,
                     kernel_size_factor=kernel_size_factor,
                     stride_last=stride_last,
+                    quant_mode=quant_mode,
                 )
             )
             feat_in = lcfg['filters']
 
         self._feat_out = feat_in
 
+        self.encoder_layers = encoder_layers
         self.encoder = torch.nn.Sequential(*encoder_layers)
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
     @typecheck()
     def forward(self, audio_signal, length=None):
-        s_input, length = self.encoder(([audio_signal], length))
+        s_input, length = [audio_signal], length
+        for layer in self.encoder_layers:
+            s_input, length = layer((s_input, length))
         if length is None:
             return s_input[-1]
 
