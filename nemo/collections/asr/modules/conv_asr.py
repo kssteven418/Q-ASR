@@ -197,10 +197,8 @@ class ConvASREncoder(NeuralModule, Exportable):
         s_input, length = [audio_signal], length
         s_input_scaling_factor = audio_signal_scaling_factor
         for i, layer in enumerate(self.encoder_layers):
-            print("Layer", i)
             s_input, length, s_input_scaling_factor = \
                     layer((s_input, length), s_input_scaling_factor)
-            print()
         if length is None:
             return s_input[-1]
 

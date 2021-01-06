@@ -158,11 +158,6 @@ class QuantAct(Module):
                 self.activation_bit, self.quant_mode, 
                 self.act_scaling_factor, 
                 identity, identity_scaling_factor)
-        if identity is not None:
-            print('QuantAct')
-            print((x )[0][0][10])
-            print((identity * identity_scaling_factor)[0][0][10])
-            print((quant_act_int * self.act_scaling_factor)[0][0][10])
 
         correct_output_scale = self.act_scaling_factor
         #print(quant_act_int.shape)
@@ -239,10 +234,7 @@ class QuantConv1d(Module):
                     stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
             if self.bn is not None:
-                print('BN folded BatchNorm1d')
-                print(conv[0][0][:10])
                 conv = self.bn(conv)
-                print(conv[0][0][:10])
             return conv, None
         
         assert self.quant_mode == 'symmetric'
@@ -291,16 +283,7 @@ class QuantConv1d(Module):
         correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
 
         if self.bn is not None:
-            print('BN folded BatchNorm1d')
-            inp = conv_int * correct_scaling_factor
-            print(inp[0][0][:10])
-            #print((conv_int * correct_scaling_factor)[0])
-            #print((conv_int * correct_scaling_factor).shape)
-            temp = self.bn(conv_int * correct_scaling_factor)
-            print(temp[0][0][:10])
-            #print((temp)[0])
-            #print(temp.shape)
-            return temp, None
+            return self.bn(conv_int * correct_scaling_factor), None
 
         return conv_int * correct_scaling_factor, correct_scaling_factor
 
