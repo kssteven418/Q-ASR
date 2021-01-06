@@ -201,6 +201,7 @@ class QuantConv1d(Module):
             self.bias_integer = None
         self.register_buffer('weight_integer', torch.zeros_like(self.weight))
         self.register_buffer('conv_scaling_factor', torch.zeros(self.out_channels))
+        self.conv = conv
 
     def fix(self):
         """
@@ -227,28 +228,72 @@ class QuantConv1d(Module):
 
         w_transform = self.weight.data.detach()
         if self.per_channel:
-            w_min, _ = torch.min(w_transform, dim=-1, out=None, keepdim=True)
-            w_max, _ = torch.max(w_transform, dim=-1, out=None, keepdim=True)
+            w_min, _ = torch.min(w_transform, dim=-1, out=None)
+            w_max, _ = torch.max(w_transform, dim=-1, out=None)
+            w_min, _ = torch.min(w_min, dim=-1, out=None)
+            w_max, _ = torch.max(w_max, dim=-1, out=None)
         else:
-            w_min = w_transform.min().view(1, 1, 1)
-            w_max = w_transform.max().view(1, 1, 1)
+            w_min = w_transform.min()
+            w_max = w_transform.max()
 
         #print('w, w_max :', w_transform.shape, w_max.shape)
+        w_min = w_min.view(-1, 1, 1)
+        w_max = w_max.view(-1, 1, 1)
 
         self.conv_scaling_factor = symmetric_linear_quantization_params(
                 self.weight_bit, w_min, w_max, self.per_channel)
-        #print('scaling factor', self.conv_scaling_factor.shape)
 
         self.weight_integer = self.weight_function(
                 self.weight, self.weight_bit, self.percentile_mode, 
                 self.conv_scaling_factor)
 
+        bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
+
+        if self.bias:
+            self.bias_integer = self.weight_function(self.bias, 
+                self.bias_bit, self.percentile_mode, bias_scaling_factor)
+
+        x_int = (x / pre_act_scaling_factor).type(torch.double)
+        w_int = self.weight_integer.type(torch.double)
+
+        #print('before', x_int.dtype, self.weight_integer.dtype, self.bias_integer)
+        conv_int = F.conv1d(x_int, weight=w_int, bias=self.bias_integer,
+                stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
+        #print('after', conv_int.dtype)
+
         #print(self.weight.abs().max())
         #print((self.weight - self.weight_integer * self.conv_scaling_factor).abs().max())
         #print()
 
-        return F.conv1d(x, weight=self.weight, bias=self.bias, 
+        temp = F.conv1d(x, weight=self.weight, bias=self.bias, 
                 stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+        correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
+        '''
+        print(temp.abs().max())
+        print((temp - conv_int * correct_scaling_factor).abs().max())
+        print(pre_act_scaling_factor.abs().min())
+        print(correct_scaling_factor.abs().max())
+        print((conv_int * correct_scaling_factor).abs().max())
+        print('--')
+        print(conv_int.max(), conv_int.min(), conv_int.dtype)
+        print(x_int.max(), x_int.min(), x_int.dtype)
+        print(self.weight_integer.max(), self.weight_integer.min(), self.weight_integer.dtype)
+        if self.bias_integer is None:
+            print(None)
+        else:
+            print(self.bias_integer.max(), self.bias_integer.min())
+        print()
+        #print(conv_int)
+        '''
+
+        '''
+        print((conv_int * correct_scaling_factor - temp).abs().max())
+        print(temp.abs().max())
+        print()
+        '''
+        return conv_int * correct_scaling_factor, correct_scaling_factor
+        return temp
 
 
 class QuantBnConv2d(Module):
@@ -423,8 +468,7 @@ class QuantBnConv2d(Module):
                     self.weight_integer = self.weight_function(scaled_weight, self.weight_bit,
                                                                self.convbn_scaling_factor)
                     if self.quantize_bias:
-                        bias_scaling_factor = self.convbn_scaling_factor.view(1, -1) * pre_act_scaling_factor.view(1,
-                                                                                                                   -1)
+                        bias_scaling_factor = self.convbn_scaling_factor.view(1, -1) * pre_act_scaling_factor.view(1, -1)
                         self.bias_integer = self.weight_function(scaled_bias, self.bias_bit, bias_scaling_factor)
                     self.convbn_scaled_bias = scaled_bias
                 else:

@@ -20,6 +20,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from nemo.collections.asr.parts.activations import Swish
+from nemo.quantization.utils.quant_modules import * 
 
 jasper_activations = {"hardtanh": nn.Hardtanh, "relu": nn.ReLU, "selu": nn.SELU, "swish": Swish}
 
@@ -139,7 +140,7 @@ class MaskedConv1d(nn.Module):
             out_channels = heads
             groups = heads
 
-        self.conv = nn.Conv1d(
+        conv = nn.Conv1d(
             in_channels,
             out_channels,
             kernel_size,
@@ -149,6 +150,10 @@ class MaskedConv1d(nn.Module):
             groups=groups,
             bias=bias,
         )
+        self.act = QuantAct(8, quant_mode='symmetric', per_channel=False, channel_len=in_channels)
+        self.conv = QuantConv1d(8, bias_bit=32, quant_mode='symmetric', per_channel=True)
+        self.conv.set_param(conv)
+
         self.use_mask = use_mask
         self.heads = heads
 
@@ -170,7 +175,8 @@ class MaskedConv1d(nn.Module):
         if self.heads != -1:
             x = x.view(-1, self.heads, sh[-1])
 
-        out = self.conv(x)
+        x, x_scaling_factor = self.act(x)
+        out, out_scaling_factor = self.conv(x, x_scaling_factor)
 
         if self.heads != -1:
             out = out.view(sh[0], self.real_out_channels, -1)
@@ -306,7 +312,8 @@ class JasperBlock(nn.Module):
         inplanes_loop = inplanes
         conv = nn.ModuleList()
 
-        for _ in range(repeat - 1):
+        for i in range(repeat - 1):
+            print(i, activation)
             # Stride last means only the last convolution in block will have stride
             if stride_last:
                 stride_val = [1]
@@ -410,6 +417,7 @@ class JasperBlock(nn.Module):
         separable=False,
     ):
         use_mask = self.conv_mask
+        print('mask', self.conv_mask)
         if use_mask:
             return MaskedConv1d(
                 in_channels,
@@ -450,6 +458,7 @@ class JasperBlock(nn.Module):
         normalization="batch",
         norm_groups=1,
     ):
+        print('separable', separable, 'normalization', normalization, 'groups', groups)
         if norm_groups == -1:
             norm_groups = out_channels
 
