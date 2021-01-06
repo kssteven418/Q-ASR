@@ -147,12 +147,22 @@ class QuantAct(Module):
             # this is for the input quantization 
             quant_act_int = self.act_function(x, self.activation_bit, \
                     self.percentile, self.act_scaling_factor)
-        else:
-            quant_act_int = fixedpoint_mul.apply(
-                    x, pre_act_scaling_factor, 
-                    self.activation_bit, self.quant_mode, 
-                    self.act_scaling_factor, 
-                    identity, identity_scaling_factor)
+
+            # This is just a temporal solution
+            # Normally, if pre_act_scaling_factor is None, then identity is None as well
+            x = quant_act_int * self.act_scaling_factor
+            pre_act_scaling_factor = self.act_scaling_factor
+
+        quant_act_int = fixedpoint_mul.apply(
+                x, pre_act_scaling_factor, 
+                self.activation_bit, self.quant_mode, 
+                self.act_scaling_factor, 
+                identity, identity_scaling_factor)
+        if identity is not None:
+            print('QuantAct')
+            print((x )[0][0][10])
+            print((identity * identity_scaling_factor)[0][0][10])
+            print((quant_act_int * self.act_scaling_factor)[0][0][10])
 
         correct_output_scale = self.act_scaling_factor
         #print(quant_act_int.shape)
@@ -202,6 +212,7 @@ class QuantConv1d(Module):
         self.register_buffer('weight_integer', torch.zeros_like(self.weight))
         self.register_buffer('conv_scaling_factor', torch.zeros(self.out_channels))
         self.conv = conv
+        self.bn = None
 
     def fix(self):
         """
@@ -215,14 +226,24 @@ class QuantConv1d(Module):
         """
         pass
 
+    def bn_folding(self, bn):
+        self.bn = bn
+
     def forward(self, x, pre_act_scaling_factor=None):
         """
         x: the input activation
         pre_act_scaling_factor: the scaling factor of the previous activation quantization layer
         """
         if self.quant_mode == 'none':
-            return F.conv1d(x, weight=self.weight, bias=self.bias, 
-                    stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups), None
+            conv =  F.conv1d(x, weight=self.weight, bias=self.bias, 
+                    stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
+
+            if self.bn is not None:
+                print('BN folded BatchNorm1d')
+                print(conv[0][0][:10])
+                conv = self.bn(conv)
+                print(conv[0][0][:10])
+            return conv, None
         
         assert self.quant_mode == 'symmetric'
 
@@ -256,7 +277,6 @@ class QuantConv1d(Module):
         x_int = (x / pre_act_scaling_factor).type(torch.double)
         w_int = self.weight_integer.type(torch.double)
 
-        #print('before', x_int.dtype, self.weight_integer.dtype, self.bias_integer)
         conv_int = F.conv1d(x_int, weight=w_int, bias=self.bias_integer,
                 stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups).type(torch.float)
         #print('after', conv_int.dtype)
@@ -269,30 +289,19 @@ class QuantConv1d(Module):
                 stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
         correct_scaling_factor = bias_scaling_factor.view(1, -1, 1)
-        #print(self.conv_scaling_factor.shape, pre_act_scaling_factor.shape, correct_scaling_factor.shape)
-        '''
-        print(temp.abs().max())
-        print((temp - conv_int * correct_scaling_factor).abs().max())
-        print(pre_act_scaling_factor.abs().min())
-        print(correct_scaling_factor.abs().max())
-        print((conv_int * correct_scaling_factor).abs().max())
-        print('--')
-        print(conv_int.max(), conv_int.min(), conv_int.dtype)
-        print(x_int.max(), x_int.min(), x_int.dtype)
-        print(self.weight_integer.max(), self.weight_integer.min(), self.weight_integer.dtype)
-        if self.bias_integer is None:
-            print(None)
-        else:
-            print(self.bias_integer.max(), self.bias_integer.min())
-        print()
-        #print(conv_int)
-        '''
 
-        '''
-        print((conv_int * correct_scaling_factor - temp).abs().max())
-        print(temp.abs().max())
-        print()
-        '''
+        if self.bn is not None:
+            print('BN folded BatchNorm1d')
+            inp = conv_int * correct_scaling_factor
+            print(inp[0][0][:10])
+            #print((conv_int * correct_scaling_factor)[0])
+            #print((conv_int * correct_scaling_factor).shape)
+            temp = self.bn(conv_int * correct_scaling_factor)
+            print(temp[0][0][:10])
+            #print((temp)[0])
+            #print(temp.shape)
+            return temp, None
+
         return conv_int * correct_scaling_factor, correct_scaling_factor
 
 

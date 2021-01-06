@@ -164,6 +164,9 @@ class MaskedConv1d(nn.Module):
             lens + 2 * self.conv.padding[0] - self.conv.dilation[0] * (self.conv.kernel_size[0] - 1) - 1
         ) // self.conv.stride[0] + 1
 
+    def bn_folding(self, bn):
+        self.conv.bn_folding(bn)
+
     def forward(self, x, lens, scaling_factor=None):
         if self.use_mask:
             lens = lens.to(dtype=torch.long)
@@ -411,6 +414,24 @@ class JasperBlock(nn.Module):
         self.res_act =  QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
         self.mout = nn.Sequential(*self._get_act_dropout_layer(drop_prob=dropout, activation=activation))
 
+    def bn_folding(self):
+        def _folding(layers, l):
+            if isinstance(l, nn.BatchNorm1d):
+                assert isinstance(layers[-1], MaskedConv1d)
+                layers[-1].bn_folding(l)
+            else:
+                layers.append(l)
+
+        print(self.mconv)
+        conv = nn.ModuleList()
+
+        if self.mconv is not None:
+            for l in self.mconv:
+                _folding(conv, l)
+        print(conv)
+        print()
+        self.mconv = conv
+
     def _get_conv(
         self,
         in_channels,
@@ -469,7 +490,6 @@ class JasperBlock(nn.Module):
         norm_groups=1,
         quant_mode='none',
     ):
-        print('separable', separable, 'normalization', normalization, 'groups', groups)
         if norm_groups == -1:
             norm_groups = out_channels
 
@@ -553,14 +573,23 @@ class JasperBlock(nn.Module):
 
         lens = lens_orig
         for i, l in enumerate(self.mconv):
-            print(type(l))
+            print('mconv', type(l))
             # if we're doing masked convolutions, we need to pass in and
             # possibly update the sequence lengths
             # if (i % 4) == 0 and self.conv_mask:
             if isinstance(l, MaskedConv1d):
+                temp = out
                 out, lens, out_scaling_factor = l(out, lens, out_scaling_factor)
+                print('---')
+                print(temp[0][0][:10])
+                print(out[0][0][:10])
             else:
+                temp = out
                 out = l(out)
+                if isinstance(l, nn.BatchNorm1d):
+                    print('---')
+                    print(temp[0][0][:10])
+                    print(out[0][0][:10])
 
         # compute the residuals
         if self.res is not None:
@@ -571,21 +600,37 @@ class JasperBlock(nn.Module):
             for i, layer in enumerate(self.res):
                 res_out = xs[i]
                 for j, res_layer in enumerate(layer):
+                    print('res', type(res_layer))
+                    print(res_out[0][0][10])
                     if isinstance(res_layer, MaskedConv1d):
                         res_out, _, res_out_scaling_factor = \
                                 res_layer(res_out, lens_orig, res_out_scaling_factor)
                     else:
                         res_out = res_layer(res_out)
+                    print(res_out[0][0][10])
 
                 if self.residual_mode == 'add' or self.residual_mode == 'stride_add':
+                    print('add')
+                    print(out.shape, res_out.shape)
+                    print(out[0][0][:10])
+                    print(res_out[0][0][:10])
+                    print(None if out_scaling_factor is None else out_scaling_factor[0][0][:10])
                     #out = out + res_out
                     out, out_scaling_factor = self.res_act(out, out_scaling_factor,
                             res_out, res_out_scaling_factor)
+                    print('add after')
+                    print(out.shape)
+                    print(out[0][0][:10])
+
                 else:
                     out = torch.max(out, res_out)
 
         # compute the output
         out = self.mout(out)
+        print('out')
+        print(out[0][0][:10])
+        for l in self.mout:
+            print('out', l)
         if self.res is not None and self.dense_residual:
             return xs + [out], lens
 

@@ -185,13 +185,22 @@ class ConvASREncoder(NeuralModule, Exportable):
         self.encoder = torch.nn.Sequential(*encoder_layers)
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
+    def bn_folding(self):
+        for l in self.encoder_layers:
+            l.bn_folding()
+
+        #import sys
+        #sys.exit()
+
     @typecheck()
     def forward(self, audio_signal, length=None, audio_signal_scaling_factor=None):
         s_input, length = [audio_signal], length
         s_input_scaling_factor = audio_signal_scaling_factor
-        for layer in self.encoder_layers:
+        for i, layer in enumerate(self.encoder_layers):
+            print("Layer", i)
             s_input, length, s_input_scaling_factor = \
                     layer((s_input, length), s_input_scaling_factor)
+            print()
         if length is None:
             return s_input[-1]
 
