@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Union
 
 import onnx
 import torch
+import omegaconf
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pytorch_lightning import Trainer
 
@@ -98,6 +99,8 @@ class EncDecCTCModel(ASRModel, Exportable):
 
         super().__init__(cfg=cfg, trainer=trainer)
         self.preprocessor = EncDecCTCModel.from_config_dict(self._cfg.preprocessor)
+        with omegaconf.open_dict(self._cfg.encoder):
+            self._cfg.encoder.quant_mode = 'symmetric'
         self.encoder = EncDecCTCModel.from_config_dict(self._cfg.encoder)
 
         with open_dict(self._cfg):
