@@ -39,6 +39,7 @@ from nemo.core.neural_types import (
     SpectrogramType,
 )
 from nemo.utils import logging
+from nemo.quantization.utils.quant_modules import *
 
 __all__ = ['ConvASRDecoder', 'ConvASREncoder', 'ConvASRDecoderClassification']
 
@@ -192,17 +193,18 @@ class ConvASREncoder(NeuralModule, Exportable):
         #import sys
         #sys.exit()
 
-    @typecheck()
+    #@typecheck()
     def forward(self, audio_signal, length=None, audio_signal_scaling_factor=None):
         s_input, length = [audio_signal], length
         s_input_scaling_factor = audio_signal_scaling_factor
         for i, layer in enumerate(self.encoder_layers):
             s_input, length, s_input_scaling_factor = \
                     layer((s_input, length), s_input_scaling_factor)
+
         if length is None:
             return s_input[-1]
 
-        return s_input[-1], length
+        return s_input[-1], length, s_input_scaling_factor
 
 
 class ConvASRDecoder(NeuralModule, Exportable):
@@ -229,8 +231,9 @@ class ConvASRDecoder(NeuralModule, Exportable):
     def output_types(self):
         return OrderedDict({"logprobs": NeuralType(('B', 'T', 'D'), LogprobsType())})
 
-    def __init__(self, feat_in, num_classes, init_mode="xavier_uniform", vocabulary=None):
+    def __init__(self, feat_in, num_classes, init_mode="xavier_uniform", vocabulary=None, quant_mode='none'):
         super().__init__()
+        self.quant_mode = quant_mode
 
         if vocabulary is not None:
             if num_classes != len(vocabulary):
@@ -241,15 +244,24 @@ class ConvASRDecoder(NeuralModule, Exportable):
         self._feat_in = feat_in
         # Add 1 for blank char
         self._num_classes = num_classes + 1
+        self.act = QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
+        conv = torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
+        qconv = QuantConv1d(8, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
+        qconv.set_param(conv)
 
         self.decoder_layers = torch.nn.Sequential(
-            torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
+            #torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
+            qconv
         )
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
-    @typecheck()
-    def forward(self, encoder_output):
-        return torch.nn.functional.log_softmax(self.decoder_layers(encoder_output).transpose(1, 2), dim=-1)
+    #@typecheck()
+    def forward(self, encoder_output, encoder_output_scaling_factor=None):
+        output, output_scaling_factor = self.act(encoder_output, encoder_output_scaling_factor)
+        
+        for l in self.decoder_layers:
+            output, _ = l(output, output_scaling_factor)
+        return torch.nn.functional.log_softmax(output.transpose(1, 2), dim=-1)
 
     def input_example(self):
         """

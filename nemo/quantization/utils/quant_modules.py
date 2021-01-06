@@ -258,9 +258,9 @@ class QuantConv1d(Module):
 
             bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
 
-            if self.bias:
+            if self.bias is not None:
                 self.bias_integer = self.weight_function(self.bias, 
-                    self.bias_bit, self.percentile_mode, bias_scaling_factor)
+                    self.bias_bit, self.percentile_mode, bias_scaling_factor.reshape([-1])).type(torch.double)
 
             x_int = (x / pre_act_scaling_factor).type(torch.double)
             w_int = self.weight_integer.type(torch.double)

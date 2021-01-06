@@ -619,6 +619,6 @@ class JasperBlock(nn.Module):
         out = self.mout(out)
 
         if self.res is not None and self.dense_residual:
-            return xs + [out], lens
+            return xs + [out], lens, out_scaling_factor
 
-        return [out], lens, None
+        return [out], lens, out_scaling_factor

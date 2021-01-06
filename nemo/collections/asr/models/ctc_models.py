@@ -99,8 +99,11 @@ class EncDecCTCModel(ASRModel, Exportable):
 
         super().__init__(cfg=cfg, trainer=trainer)
         self.preprocessor = EncDecCTCModel.from_config_dict(self._cfg.preprocessor)
+        self.quant_mode = 'symmetric'
         with omegaconf.open_dict(self._cfg.encoder):
             self._cfg.encoder.quant_mode = 'symmetric'
+        with omegaconf.open_dict(self._cfg.decoder):
+            self._cfg.decoder.quant_mode = 'symmetric'
         self.encoder = EncDecCTCModel.from_config_dict(self._cfg.encoder)
 
         with open_dict(self._cfg):
@@ -387,8 +390,8 @@ class EncDecCTCModel(ASRModel, Exportable):
         if self.spec_augmentation is not None and self.training:
             processed_signal = self.spec_augmentation(input_spec=processed_signal)
 
-        encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
-        log_probs = self.decoder(encoder_output=encoded)
+        encoded, encoded_len, encoded_scaling_factor = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
+        log_probs = self.decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
         greedy_predictions = log_probs.argmax(dim=-1, keepdim=False)
         return log_probs, encoded_len, greedy_predictions
 
