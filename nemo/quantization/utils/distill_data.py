@@ -77,6 +77,7 @@ def get_distill_data(teacher_model,
                      batch_size,
                      dim,
                      seqlen,
+                     train_iter=500,
                      num_batch=1):
     """
     Generate distilled data according to the BatchNorm statistics in the pretrained single-precision model.
@@ -112,6 +113,7 @@ def get_distill_data(teacher_model,
     assert len(hooks) == len(bn_stats)
 
     for i, gaussian_data in enumerate(dataloader):
+        print('Distillation: %s / %s' % (i+1, num_batch))
         if i == num_batch:
             break
         # initialize the criterion, optimizer, and scheduler
@@ -125,7 +127,7 @@ def get_distill_data(teacher_model,
                                                          min_lr=1e-4,
                                                          verbose=False,
                                                          patience=100)
-        for it in range(500):
+        for it in range(train_iter):
             teacher_model.zero_grad()
             optimizer.zero_grad()
             for hook in hooks:
@@ -151,8 +153,13 @@ def get_distill_data(teacher_model,
                 std_loss += own_loss(bn_std * bn_std, conv_var)
 
             total_loss = mean_loss + std_loss
-            print(total_loss)
             total_loss.backward()
             #print('grad', gaussian_data.grad)
             optimizer.step()
             scheduler.step(total_loss.item())
+
+        refined_gaussian.append(gaussian_data.detach().clone())
+
+    for handle in hook_handles:
+        handle.remove()
+    return refined_gaussian
