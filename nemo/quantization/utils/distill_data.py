@@ -134,7 +134,8 @@ def get_distill_data(teacher_model,
             optimizer.zero_grad()
             for hook in hooks:
                 hook.clear()
-            output = teacher_model(gaussian_data)
+            length = torch.tensor([seqlen] * batch_size).cuda()
+            output = teacher_model(gaussian_data, length)
             print(gaussian_data)
             print(length)
             print('*' * 50)
