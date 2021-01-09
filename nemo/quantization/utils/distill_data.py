@@ -94,35 +94,31 @@ def get_distill_data(teacher_model,
 
     eps = 1e-6
     # initialize hooks and single-precision model
-    length = torch.tensor([seqlen] * batch_size, dtype=torch.int64).cuda()
-    teacher_model = ModelWrapper(teacher_model, length)
     teacher_model = teacher_model.cuda()
     teacher_model = teacher_model.eval()
 
     hooks, hook_handles, bn_stats, refined_gaussian = [], [], [], []
-    for m in teacher_model.convs_before_bn:
+    for conv, bn in teacher_model.convs_before_bn:
+        assert isinstance(bn, nn.BatchNorm1d)
         hook = output_hook()
         hooks.append(hook)
-        temp = m.register_forward_hook(hook.hook)
+        temp = conv.register_forward_hook(hook.hook)
         hook_handles.append(temp)
 
-    for n, m in teacher_model.named_modules():
-        if isinstance(m, nn.BatchNorm1d):
-            # get the statistics in the BatchNorm layers
-            bn_stats.append(
-                (m.running_mean.detach().clone().flatten().cuda(),
-                 torch.sqrt(m.running_var + eps).detach().clone().flatten().cuda()))
+        bn_stats.append(
+                (bn.running_mean.detach().clone().flatten().cuda(),
+                 torch.sqrt(bn.running_var + eps).detach().clone().flatten().cuda()))
 
     assert len(hooks) == len(bn_stats)
 
     for i, gaussian_data in enumerate(dataloader):
-        print(i)
         if i == num_batch:
             break
         # initialize the criterion, optimizer, and scheduler
         #gaussian_data = gaussian_data.cuda()
         #gaussian_data.requires_grad = True
-        gaussian_data = Variable(gaussian_data.cuda(), requires_grad=True)
+        gaussian_data = gaussian_data.cuda()
+        gaussian_data.requires_grad = True
         crit = nn.CrossEntropyLoss().cuda()
         optimizer = optim.Adam([gaussian_data], lr=0.5)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
@@ -136,10 +132,6 @@ def get_distill_data(teacher_model,
                 hook.clear()
             length = torch.tensor([seqlen] * batch_size).cuda()
             output = teacher_model(gaussian_data, length)
-            print(gaussian_data)
-            print(length)
-            print('*' * 50)
-            print(output)
             #mean_loss = Variable(torch.zeros(1).cuda(), requires_grad=True)
             #std_loss = Variable(torch.zeros(1).cuda(), requires_grad=True)
             mean_loss = 0
@@ -151,25 +143,16 @@ def get_distill_data(teacher_model,
                 conv_output = hook.outputs
                 bn_mean, bn_std = bn_stat[0], bn_stat[1]
                 conv_mean = torch.mean(conv_output[0], dim=(0, 2))
-                conv_std = torch.sqrt(torch.var(conv_output[0] + eps, dim=(0, 2)))
+                conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
                 #print('conv mean', conv_mean)
                 assert bn_mean.shape == conv_mean.shape
-                assert bn_std.shape == conv_std.shape
+                assert bn_std.shape == conv_var.shape
                 mean_loss += own_loss(bn_mean, conv_mean)
-                std_loss += own_loss(bn_std, conv_std)
+                std_loss += own_loss(bn_std * bn_std, conv_var)
 
-                '''
-                tmp_mean = torch.mean(tmp_output.view(tmp_output.size(0),
-                                                      tmp_output.size(1), -1), dim=2)
-                tmp_std = torch.sqrt(
-                    torch.var(tmp_output.view(tmp_output.size(0),
-                                              tmp_output.size(1), -1),
-                              dim=2) + eps)
-                mean_loss += own_loss(bn_mean, tmp_mean)
-                std_loss += own_loss(bn_std, tmp_std)
-                '''
             total_loss = mean_loss + std_loss
             print(total_loss)
             total_loss.backward()
+            #print('grad', gaussian_data.grad)
             optimizer.step()
             scheduler.step(total_loss.item())

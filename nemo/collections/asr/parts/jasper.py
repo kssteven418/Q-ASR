@@ -561,7 +561,6 @@ class JasperBlock(nn.Module):
                 )
             ]
 
-        self.convs_before_bn.append(layers[-1])
 
         if normalization == "group":
             layers.append(nn.GroupNorm(num_groups=norm_groups, num_channels=out_channels))
@@ -575,6 +574,8 @@ class JasperBlock(nn.Module):
             raise ValueError(
                 f"Normalization method ({normalization}) does not match" f" one of [batch, layer, group, instance]."
             )
+
+        self.convs_before_bn.append((layers[-2], layers[-1]))
 
         if groups > 1:
             layers.append(GroupShuffle(groups, out_channels))
