@@ -130,6 +130,7 @@ class ConvASREncoder(NeuralModule, Exportable):
 
         self._feat_in = feat_in
         self.quant_mode = quant_mode
+        self.convs_before_bn = []
 
         residual_panes = []
         encoder_layers = []
@@ -150,7 +151,7 @@ class ConvASREncoder(NeuralModule, Exportable):
             se_interpolation_mode = lcfg.get('se_interpolation_mode', 'nearest')
             kernel_size_factor = lcfg.get('kernel_size_factor', 1.0)
             stride_last = lcfg.get('stride_last', False)
-            encoder_layers.append(
+            jasper_block =  \
                 JasperBlock(
                     feat_in,
                     lcfg['filters'],
@@ -177,7 +178,8 @@ class ConvASREncoder(NeuralModule, Exportable):
                     stride_last=stride_last,
                     quant_mode=quant_mode,
                 )
-            )
+            encoder_layers.append(jasper_block)
+            self.convs_before_bn += jasper_block.convs_before_bn
             feat_in = lcfg['filters']
 
         self._feat_out = feat_in

@@ -322,6 +322,7 @@ class JasperBlock(nn.Module):
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
+        self.convs_before_bn = []
 
         for i in range(repeat - 1):
             #print(i, activation)
@@ -559,6 +560,8 @@ class JasperBlock(nn.Module):
                     quant_mode=quant_mode,
                 )
             ]
+
+        self.convs_before_bn.append(layers[-1])
 
         if normalization == "group":
             layers.append(nn.GroupNorm(num_groups=norm_groups, num_channels=out_channels))
