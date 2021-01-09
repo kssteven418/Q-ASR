@@ -167,6 +167,11 @@ class MaskedConv1d(nn.Module):
     def bn_folding(self, bn):
         self.conv.bn_folding(bn)
 
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        self.conv.quant_mode = quant_mode
+        self.act.quant_mode = quant_mode
+
     def forward(self, x, lens, scaling_factor=None):
         if self.use_mask:
             lens = lens.to(dtype=torch.long)
@@ -440,6 +445,18 @@ class JasperBlock(nn.Module):
             res.append(res_list)
             self.res = res
 
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        if self.mconv is not None:
+            for l in self.mconv:
+                if isinstance(l, MaskedConv1d):
+                    l.set_quant_mode(quant_mode)
+        if self.res is not None:
+            assert len(self.res) == 1
+            for l in self.res[0]:
+                if isinstance(l, MaskedConv1d):
+                    l.set_quant_mode(quant_mode)
+        self.res_act.quant_mode = quant_mode
 
     def _get_conv(
         self,

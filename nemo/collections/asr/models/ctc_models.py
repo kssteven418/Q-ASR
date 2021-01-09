@@ -137,6 +137,11 @@ class EncDecCTCModel(ASRModel, Exportable):
             log_prediction=self._cfg.get("log_prediction", False),
         )
 
+    def set_quant_mode(self, quant_mode):
+        self.encoder.set_quant_mode(quant_mode)
+        self.decoder.set_quant_mode(quant_mode)
+
+
     @torch.no_grad()
     def transcribe(self, paths2audio_files: List[str], batch_size: int = 4, logprobs=False) -> List[str]:
         """

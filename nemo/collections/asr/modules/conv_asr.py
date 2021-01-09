@@ -206,6 +206,11 @@ class ConvASREncoder(NeuralModule, Exportable):
 
         return s_input[-1], length, s_input_scaling_factor
 
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        for l in self.encoder_layers:
+            l.set_quant_mode(self.quant_mode)
+
 
 class ConvASRDecoder(NeuralModule, Exportable):
     """Simple ASR Decoder for use with CTC-based models such as JasperNet and QuartzNet
@@ -283,6 +288,13 @@ class ConvASRDecoder(NeuralModule, Exportable):
         if m_count > 0:
             logging.warning(f"Turned off {m_count} masked convolutions")
         Exportable._prepare_for_export(self)
+
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        self.act.quant_mode = quant_mode
+        for l in self.decoder_layers:
+            l.quant_mode = quant_mode
+
 
     @property
     def vocabulary(self):

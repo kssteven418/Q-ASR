@@ -204,6 +204,11 @@ class QuantConv1d(Module):
         self.conv = conv
         self.bn = None
 
+    def __repr__(self):
+        return "{0}(weight_bit={1}, per_channel: {2}, " \
+               "quant_mode: {3}".format(self.__class__.__name__, self.weight_bit,
+                                        self.per_channel, self.quant_mode)
+
     def fix(self):
         """
         fix the BN statistics by setting fix_BN to True
