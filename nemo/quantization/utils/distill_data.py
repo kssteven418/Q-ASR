@@ -113,9 +113,9 @@ def get_distill_data(teacher_model,
     assert len(hooks) == len(bn_stats)
 
     for i, gaussian_data in enumerate(dataloader):
-        print('Distillation: %s / %s' % (i+1, num_batch))
         if i == num_batch:
             break
+        print('Distillation: %s / %s' % (i+1, num_batch))
         # initialize the criterion, optimizer, and scheduler
         #gaussian_data = gaussian_data.cuda()
         #gaussian_data.requires_grad = True
