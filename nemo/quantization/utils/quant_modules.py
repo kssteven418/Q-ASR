@@ -135,29 +135,30 @@ class QuantAct(Module):
         x_min = x_min.view(1, -1, 1)
         x_max = x_max.view(1, -1, 1)
 
-        self.act_scaling_factor = symmetric_linear_quantization_params(
+        act_scaling_factor = symmetric_linear_quantization_params(
             self.activation_bit, x_min, x_max, 
             per_channel=self.per_channel)
+        self.act_scaling_factor = act_scaling_factor.reshape(-1)
 
         if pre_act_scaling_factor is None:
             # this is for the input quantization 
             quant_act_int = self.act_function(x, self.activation_bit, \
-                    self.percentile, self.act_scaling_factor)
+                    self.percentile, act_scaling_factor)
 
             # This is just a temporal solution
             # Normally, if pre_act_scaling_factor is None, then identity is None as well
-            x = quant_act_int * self.act_scaling_factor
-            pre_act_scaling_factor = self.act_scaling_factor
+            x = quant_act_int * act_scaling_factor
+            pre_act_scaling_factor = act_scaling_factor
 
         quant_act_int = fixedpoint_mul.apply(
                 x, pre_act_scaling_factor, 
                 self.activation_bit, self.quant_mode, 
-                self.act_scaling_factor, 
+                act_scaling_factor, 
                 identity, identity_scaling_factor)
 
-        correct_output_scale = self.act_scaling_factor
+        correct_output_scale = act_scaling_factor
 
-        return quant_act_int * correct_output_scale, self.act_scaling_factor
+        return quant_act_int * correct_output_scale, act_scaling_factor
 
 
 class QuantConv1d(Module):
@@ -237,13 +238,15 @@ class QuantConv1d(Module):
         w_min = w_min.view(-1, 1, 1)
         w_max = w_max.view(-1, 1, 1)
 
-        self.conv_scaling_factor = symmetric_linear_quantization_params(
+        conv_scaling_factor = symmetric_linear_quantization_params(
                 self.weight_bit, w_min, w_max, self.per_channel)
 
-        self.weight_integer = self.weight_function(
-                weight, self.weight_bit, self.percentile_mode, self.conv_scaling_factor)
+        self.conv_scaling_factor = conv_scaling_factor.reshape(-1)
 
-        bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
+        self.weight_integer = self.weight_function(
+                weight, self.weight_bit, self.percentile_mode, conv_scaling_factor)
+
+        bias_scaling_factor = conv_scaling_factor * pre_act_scaling_factor
 
         if bias is not None:
             # self.bias_integer?
