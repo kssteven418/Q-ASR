@@ -35,6 +35,7 @@ from nemo.core.classes.exportable import Exportable
 from nemo.core.neural_types import AudioSignal, LabelsType, LengthsType, LogprobsType, NeuralType, SpectrogramType
 from nemo.utils import logging
 from nemo.utils.export_utils import attach_onnx_to_onnx
+import nemo.quantization.utils.quantize_model as quantize_model
 
 __all__ = ['EncDecCTCModel', 'JasperNet', 'QuartzNet']
 
@@ -431,6 +432,7 @@ class EncDecCTCModel(ASRModel, Exportable):
         return {'loss': loss_value, 'log': tensorboard_logs}
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        quantize_model.evaluate(self)
         signal, signal_len, transcript, transcript_len = batch
         if isinstance(batch, DALIOutputs) and batch.has_processed_signal:
             log_probs, encoded_len, predictions = self.forward(
@@ -444,6 +446,8 @@ class EncDecCTCModel(ASRModel, Exportable):
         )
         self._wer.update(predictions=predictions, targets=transcript, target_lengths=transcript_len)
         wer, wer_num, wer_denom = self._wer.compute()
+        quantize_model.train(self)
+
         return {
             'val_loss': loss_value,
             'val_wer_num': wer_num,
