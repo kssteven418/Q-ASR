@@ -181,6 +181,7 @@ class QuantConv1d(Module):
         self.counter = 1
         self.percentile_mode = False
         self.fix_bn = fix_bn
+        self.update_bn = True
 
         if self.quant_mode == "symmetric":
             self.weight_function = SymmetricQuantFunction.apply
@@ -221,6 +222,9 @@ class QuantConv1d(Module):
         change the mode (fixed or not) of BN statistics to its original status
         """
         self.fix_bn = False
+
+    def set_update_bn(self, update: bool):
+        self.update_bn = update
 
     def bn_folding(self, bn):
         self.bn = bn
@@ -293,9 +297,11 @@ class QuantConv1d(Module):
             batch_mean = torch.mean(conv_output, dim=(0, 2))
             batch_var = torch.var(conv_output, dim=(0, 2))
 
-            # update running mean and vairance
-            self.bn.running_mean = self.bn.running_mean.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_mean
-            self.bn.running_var = self.bn.running_var.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_var
+
+            if self.update_bn:
+                # update running mean and vairance
+                self.bn.running_mean = self.bn.running_mean.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_mean
+                self.bn.running_var = self.bn.running_var.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_var
 
             output_factor = self.bn.weight.view(1, -1, 1) / torch.sqrt(self.bn.running_var + self.bn.eps).view(1, -1, 1)
             output = output_factor * (conv_output - self.bn.running_mean.view(1, -1, 1)) + self.bn.bias.view(1, -1, 1)
