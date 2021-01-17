@@ -51,3 +51,5 @@ def train(model):
 def calibrate(model):
     freeze_model(model, [QuantConv1d, QuantLinear])
 
+def fix_act(model):
+    freeze_model(model, [QuantAct])
