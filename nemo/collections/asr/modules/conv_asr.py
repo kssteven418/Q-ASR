@@ -197,16 +197,18 @@ class ConvASREncoder(NeuralModule, Exportable):
 
     #@typecheck()
     def forward(self, audio_signal, length=None, audio_signal_scaling_factor=None):
-        s_input, length = [audio_signal], length
-        s_input_scaling_factor = audio_signal_scaling_factor
+        s_input, length = [(audio_signal, audio_signal_scaling_factor)], length
         for i, layer in enumerate(self.encoder_layers):
-            s_input, length, s_input_scaling_factor = \
-                    layer((s_input, length), s_input_scaling_factor)
+            s_input, length = \
+                    layer((s_input, length))
+
+        s_input_last, s_input_last_scaling_factor = s_input[-1]
 
         if length is None:
-            return s_input[-1]
+            assert self.quant_mode != 'symmetric'
+            return s_input_last
 
-        return s_input[-1], length, s_input_scaling_factor
+        return s_input_last, length, s_input_last_scaling_factor
 
     def set_quant_mode(self, quant_mode):
         self.quant_mode = quant_mode

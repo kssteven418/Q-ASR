@@ -441,12 +441,12 @@ class JasperBlock(nn.Module):
         self.mconv = conv
 
         if self.res is not None:
-            assert len(self.res) == 1
             res = nn.ModuleList()
-            res_list = nn.ModuleList()
-            for l in self.res[0]:
-                _folding(res_list, l)
-            res.append(res_list)
+            for _l in self.res: # for all residual connections
+                res_list = nn.ModuleList()
+                for l in _l:
+                    _folding(res_list, l)
+                res.append(res_list)
             self.res = res
 
     def set_quant_mode(self, quant_mode):
@@ -456,10 +456,10 @@ class JasperBlock(nn.Module):
                 if isinstance(l, MaskedConv1d):
                     l.set_quant_mode(quant_mode)
         if self.res is not None:
-            assert len(self.res) == 1
-            for l in self.res[0]:
-                if isinstance(l, MaskedConv1d):
-                    l.set_quant_mode(quant_mode)
+            for _l in self.res: # for all residual connections
+                for l in _l: # for all operations in a residual connection
+                    if isinstance(l, MaskedConv1d):
+                        l.set_quant_mode(quant_mode)
         self.res_act.quant_mode = quant_mode
 
     def _get_conv(
@@ -590,19 +590,20 @@ class JasperBlock(nn.Module):
         layers = [activation, nn.Dropout(p=drop_prob)]
         return layers
 
-    def forward(self, input_: Tuple[List[Tensor], Optional[Tensor]], input_scaling_factor=None):
+    def forward(self, input_: Tuple[List[Tuple[Tensor, Optional[Tensor]]], Optional[Tensor]]):
+        # input: ([(input0, sf0), ..., (inputN, sfN)], length)
         # type: (Tuple[List[Tensor], Optional[Tensor]]) -> Tuple[List[Tensor], Optional[Tensor]] # nopep8
         lens_orig = None
         xs = input_[0]
         if len(input_) == 2:
             xs, lens_orig = input_
 
-        if self.quant_mode == 'symmetric':
-            assert len(xs) == 1
+        #if self.quant_mode == 'symmetric':
+        #    assert len(xs) == 1
 
         # compute forward convolutions
-        out = xs[-1]
-        out_scaling_factor = input_scaling_factor
+        out, out_scaling_factor = xs[-1]
+        #out_scaling_factor = input_scaling_factor
 
         lens = lens_orig
         for i, l in enumerate(self.mconv):
@@ -618,11 +619,10 @@ class JasperBlock(nn.Module):
         # compute the residuals
         if self.res is not None:
             if self.quant_mode == 'symmetric':
-                assert len(self.res) == 1
-                assert  self.residual_mode == 'add' or self.residual_mode == 'stride_add'
-            res_out_scaling_factor = input_scaling_factor
+                #assert len(self.res) == 1
+                assert self.residual_mode == 'add' or self.residual_mode == 'stride_add'
             for i, layer in enumerate(self.res):
-                res_out = xs[i]
+                res_out, res_out_scaling_factor = xs[i]
                 for j, res_layer in enumerate(layer):
                     #print('res', type(res_layer))
                     if isinstance(res_layer, MaskedConv1d):
@@ -643,6 +643,6 @@ class JasperBlock(nn.Module):
         out = self.mout(out)
 
         if self.res is not None and self.dense_residual:
-            return xs + [out], lens, out_scaling_factor
+            return xs + [(out, out_scaling_factor)], lens
 
-        return [out], lens, out_scaling_factor
+        return [(out, out_scaling_factor)], lens
