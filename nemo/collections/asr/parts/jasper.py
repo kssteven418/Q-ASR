@@ -154,6 +154,7 @@ class MaskedConv1d(nn.Module):
         )
         self.act = QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
         self.conv = QuantConv1d(8, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
+        self.act1 = QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
         self.conv.set_param(conv)
 
         self.use_mask = use_mask
@@ -186,6 +187,8 @@ class MaskedConv1d(nn.Module):
 
         x, x_scaling_factor = self.act(x, scaling_factor)
         out, out_scaling_factor = self.conv(x, x_scaling_factor)
+        if out_scaling_factor is None:
+            out, out_scaling_factor = self.act1(out, out_scaling_factor)
 
         if self.heads != -1:
             out = out.view(sh[0], self.real_out_channels, -1)

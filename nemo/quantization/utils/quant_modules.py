@@ -40,7 +40,8 @@ class QuantAct(Module):
                  running_stat=True,
                  per_channel=False,
                  channel_len=None,
-                 quant_mode="none"):
+                 quant_mode="none",
+                 dynamic=False):
         super(QuantAct, self).__init__()
 
         self.activation_bit = activation_bit
@@ -61,6 +62,7 @@ class QuantAct(Module):
 
         self.quant_mode = quant_mode
         self.per_channel = per_channel
+        self.dynamic = dynamic
 
         if self.quant_mode == "none":
             self.act_function = None
@@ -129,8 +131,23 @@ class QuantAct(Module):
         assert self.quant_mode == 'symmetric', \
                 "unsupported quant mode: {}".format(quant_mode)
         
-        x_min = self.x_min if specified_min is None else specified_min
-        x_max = self.x_max if specified_max is None else specified_max
+        if self.dynamic:
+            if not self.percentile:
+                if not self.per_channel:
+                    x_min = x_act.data.min()
+                    x_max = x_act.data.max()
+                else:
+                    x_min = x_act.data.min(axis=0).values.min(axis=-1).values
+                    x_max = x_act.data.max(axis=0).values.max(axis=-1).values
+            else:
+                raise NotImplementedError("percentile mode is not currently supported.")
+
+        else:
+            x_min = self.x_min if specified_min is None else specified_min
+            x_max = self.x_max if specified_max is None else specified_max
+
+        #print(x_min, x.min(), self.x_min)
+        #print(x_max, x.max(), self.x_max)
 
         x_min = x_min.view(1, -1, 1)
         x_max = x_max.view(1, -1, 1)
