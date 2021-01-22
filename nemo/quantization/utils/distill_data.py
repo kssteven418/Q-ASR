@@ -133,11 +133,6 @@ def get_distill_data(teacher_model,
                                                          min_lr=1e-4,
                                                          verbose=True,
                                                          patience=25)
-        optimizer1 = optim.Adam([gaussian_data], lr=0.05)
-        scheduler1 = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                         min_lr=1e-4,
-                                                         verbose=True,
-                                                         patience=25)
         for it in range(train_iter):
             teacher_model.zero_grad()
             optimizer.zero_grad()
@@ -172,19 +167,14 @@ def get_distill_data(teacher_model,
                 std_loss += own_loss(bn_std * bn_std, conv_var)
 
             bn_loss = mean_loss + std_loss
-            l2_norm = torch.sqrt(gd * gd).mean()
-            #print('L1, L2 norm', float(l1_norm), float(l2_norm))
-            print(gaussian_data.min(), gaussian_data.max())
-            #match_loss = loss_fn(log_probs=log_probs, targets=target, input_lengths=encoded_len, target_lengths=target_len)
-            #match_loss = match_loss / encoded_len 
-            #total_loss = log_probs_red.mean().abs() + bn_loss  * 20
+            #l2_norm = torch.sqrt(gd * gd).mean()
+            print(gaussian_data.min(), gaussian_data.max(), alpha)
             log_prob_loss = log_probs_red.mean().abs()
             total_loss = bn_loss  + alpha * log_prob_loss
             #total_loss += 0.00 * l2_norm
             print('Log prob mean', float(log_prob_loss))
             print('bn_loss', float(bn_loss))
             print('total loss:', float(total_loss))
-            #print('match loss, total loss:', match_loss, bn_loss)
             print()
             total_loss.backward()
             optimizer.step()
