@@ -2,6 +2,25 @@ from nemo.quantization.utils.quant_modules import *
 
 list_all = [QuantAct, QuantLinear, QuantConv1d]
 
+def adjust_range(model, scale: float):
+    """
+    freeze the activation range. Resursively invokes layer.fix()
+    """
+    if type(model) in list_all:
+        if type(model) == QuantAct:
+            model.adjust_range(scale)
+    elif type(model) == nn.Sequential:
+        for n, m in model.named_children():
+            adjust_range(m, scale)
+    elif type(model) == nn.ModuleList:
+        for n in model:
+            adjust_range(n, scale)
+    else:
+        for attr in dir(model):
+            mod = getattr(model, attr)
+            if isinstance(mod, nn.Module):
+                adjust_range(mod, scale)
+
 def set_dynamic(model, update: bool):
     """
     freeze the activation range. Resursively invokes layer.fix()
