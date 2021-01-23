@@ -21,7 +21,7 @@ class UniformDataset(Dataset):
 
     def __getitem__(self, idx):
         # var[U(-128, 127)] = (127 - (-128))**2 / 12 = 5418.75
-        sample = torch.rand(self.size) * 0.6 - 0.3
+        sample = torch.rand(self.size) * 0.2 - 0.1
         return sample
 
 
@@ -128,7 +128,7 @@ def get_distill_data(teacher_model,
         gaussian_data = gaussian_data.cuda()
         gaussian_data.requires_grad = True
         crit = nn.CrossEntropyLoss().cuda()
-        optimizer = optim.Adam([gaussian_data], lr=0.05)
+        optimizer = optim.Adam([gaussian_data], lr=0.02)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                          min_lr=1e-4,
                                                          verbose=True,
@@ -144,6 +144,11 @@ def get_distill_data(teacher_model,
             length = torch.tensor([seqlen] * batch_size).cuda()
             #gd = torch.max(torch.min(gaussian_data, torch.tensor(5.0).cuda()), torch.tensor(-5.0).cuda())
             gd = gaussian_data
+
+            v = gd.std(axis=-1, keepdim=True)
+            m = gd.mean(axis=-1, keepdim=True)
+            gd = (gd - m) / v
+            gd = torch.clamp(gd, min=-4., max=4.)
             #encoded, encoded_len, encoded_scaling_factor = teacher_model(gaussian_data, length) # encoder
             encoded, encoded_len, encoded_scaling_factor = teacher_model(gd, length) # encoder
             log_probs = teacher_model_decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
@@ -170,10 +175,16 @@ def get_distill_data(teacher_model,
                 std_loss += own_loss(bn_std * bn_std, conv_var)
 
             bn_loss = mean_loss + std_loss
-            #l2_norm = torch.sqrt(gd * gd).mean()
-            print(gaussian_data.min(), gaussian_data.max(), alpha)
+            l2_norm = torch.sqrt(gd * gd).mean()
+            print(float(gd.min()), float(gd.max()), float(l2_norm))
+            mean = gd.mean().abs()
+            var = gd.var(axis=1).mean()
+            #mean_ = gd.mean(axis=-1).reshape(-1)
+            #var_ = gd.mean(axis=-1).reshape(-1)
+            print('mean, var:', float(mean), float(var))
             log_prob_loss = log_probs_red.mean().abs()
             total_loss = bn_loss  + alpha * log_prob_loss
+            total_loss += (0.0000 * var)
             #total_loss += 0.00 * l2_norm
             print('Log prob mean', float(log_prob_loss))
             print('bn_loss', float(bn_loss))

@@ -90,6 +90,10 @@ class QuantAct(Module):
         """
         self.running_stat = True
 
+    def adjust_range(self, scale):
+        self.x_min *= scale
+        self.x_max *= scale
+
     def forward(self, x, 
                 pre_act_scaling_factor=None, 
                 identity=None, 
