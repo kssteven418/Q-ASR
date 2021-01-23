@@ -134,6 +134,9 @@ def get_distill_data(teacher_model,
                                                          verbose=True,
                                                          patience=25)
         for it in range(train_iter):
+            #if it % 10 == 0:
+            #    refined_gaussian.append(gaussian_data.detach().clone())
+
             teacher_model.zero_grad()
             optimizer.zero_grad()
             for hook in hooks:
