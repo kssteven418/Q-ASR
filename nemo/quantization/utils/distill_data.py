@@ -21,7 +21,7 @@ class UniformDataset(Dataset):
 
     def __getitem__(self, idx):
         # var[U(-128, 127)] = (127 - (-128))**2 / 12 = 5418.75
-        sample = torch.rand(self.size) * 0.2 - 0.1
+        sample = torch.rand(self.size) * 0.6 - 0.3
         return sample
 
 
@@ -128,14 +128,15 @@ def get_distill_data(teacher_model,
         gaussian_data = gaussian_data.cuda()
         gaussian_data.requires_grad = True
         crit = nn.CrossEntropyLoss().cuda()
-        optimizer = optim.Adam([gaussian_data], lr=0.02)
+        optimizer = optim.Adam([gaussian_data], lr=0.05)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                          min_lr=1e-4,
                                                          verbose=True,
                                                          patience=25)
         for it in range(train_iter):
             #if it % 10 == 0:
-            #    refined_gaussian.append(gaussian_data.detach().clone())
+            if True:
+                refined_gaussian.append(gaussian_data.detach().clone())
 
             teacher_model.zero_grad()
             optimizer.zero_grad()
@@ -175,16 +176,23 @@ def get_distill_data(teacher_model,
             bn_loss = mean_loss + std_loss
             l2_norm = torch.sqrt(gd * gd).mean()
             print(float(gd.min()), float(gd.max()), float(l2_norm))
-            #mean = gd.mean().abs()
-            #var = gd.var(axis=1).mean()
-            #print('mean, var:', float(mean), float(var))
             log_prob_loss = log_probs_red.mean().abs()
-            total_loss = bn_loss  + alpha * log_prob_loss
-            #total_loss += (0.0000 * var)
-            #total_loss += 0.00 * l2_norm
+            total_loss = bn_loss  + beta * log_prob_loss
+
+            x = (gd[:, :, 1:] - gd[:, :, :-1]).abs()
+            #x = (x ** 2).sqrt()
+            #print(x.isnan().sum())
+            x = (x[:, 1:, :] - x[:, :-1, :]).abs()
+            #print(x.isnan().sum())
+            #x = (x ** 2).sqrt()
+            norm = x.mean()
+            print('Norm?', norm)
+            total_loss += alpha * norm
+
             print('Log prob mean', float(log_prob_loss))
             print('bn_loss', float(bn_loss))
             print('total loss:', float(total_loss))
+            print(len(refined_gaussian))
             print()
             total_loss.backward()
             optimizer.step()

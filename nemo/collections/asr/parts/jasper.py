@@ -187,8 +187,6 @@ class MaskedConv1d(nn.Module):
 
         x, x_scaling_factor = self.act(x, scaling_factor)
         out, out_scaling_factor = self.conv(x, x_scaling_factor)
-        if out_scaling_factor is None:
-            out, out_scaling_factor = self.act1(out, out_scaling_factor)
 
         if self.heads != -1:
             out = out.view(sh[0], self.real_out_channels, -1)
