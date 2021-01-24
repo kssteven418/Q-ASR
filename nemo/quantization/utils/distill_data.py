@@ -142,13 +142,11 @@ def get_distill_data(teacher_model,
             for hook in hooks:
                 hook.clear()
             length = torch.tensor([seqlen] * batch_size).cuda()
-            #gd = torch.max(torch.min(gaussian_data, torch.tensor(5.0).cuda()), torch.tensor(-5.0).cuda())
             gd = gaussian_data
-
-            v = gd.std(axis=-1, keepdim=True)
-            m = gd.mean(axis=-1, keepdim=True)
-            gd = (gd - m) / v
-            gd = torch.clamp(gd, min=-4., max=4.)
+            #v = gd.std(axis=-1, keepdim=True)
+            #m = gd.mean(axis=-1, keepdim=True)
+            #gd = (gd - m) / v
+            #gd = torch.clamp(gd, min=-4., max=4.)
             #encoded, encoded_len, encoded_scaling_factor = teacher_model(gaussian_data, length) # encoder
             encoded, encoded_len, encoded_scaling_factor = teacher_model(gd, length) # encoder
             log_probs = teacher_model_decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
@@ -177,14 +175,12 @@ def get_distill_data(teacher_model,
             bn_loss = mean_loss + std_loss
             l2_norm = torch.sqrt(gd * gd).mean()
             print(float(gd.min()), float(gd.max()), float(l2_norm))
-            mean = gd.mean().abs()
-            var = gd.var(axis=1).mean()
-            #mean_ = gd.mean(axis=-1).reshape(-1)
-            #var_ = gd.mean(axis=-1).reshape(-1)
-            print('mean, var:', float(mean), float(var))
+            #mean = gd.mean().abs()
+            #var = gd.var(axis=1).mean()
+            #print('mean, var:', float(mean), float(var))
             log_prob_loss = log_probs_red.mean().abs()
             total_loss = bn_loss  + alpha * log_prob_loss
-            total_loss += (0.0000 * var)
+            #total_loss += (0.0000 * var)
             #total_loss += 0.00 * l2_norm
             print('Log prob mean', float(log_prob_loss))
             print('bn_loss', float(bn_loss))
