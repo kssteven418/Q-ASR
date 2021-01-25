@@ -83,7 +83,6 @@ def get_distill_data(teacher_model,
                      num_batch=1,
                      alpha=0,
                      beta=0,
-                     loss_fn=None,
                      ):
     """
     Generate distilled data according to the BatchNorm statistics in the pretrained single-precision model.
@@ -121,10 +120,8 @@ def get_distill_data(teacher_model,
     for i, gaussian_data in enumerate(dataloader):
         if i == num_batch:
             break
-        print('Distillation: %s / %s' % (i+1, num_batch))
+        print('Distillation: %s / %s' % (i+1, num_batch), alpha)
         # initialize the criterion, optimizer, and scheduler
-        #gaussian_data = gaussian_data.cuda()
-        #gaussian_data.requires_grad = True
         gaussian_data = gaussian_data.cuda()
         gaussian_data.requires_grad = True
         crit = nn.CrossEntropyLoss().cuda()
@@ -134,9 +131,10 @@ def get_distill_data(teacher_model,
                                                          verbose=True,
                                                          patience=25)
         for it in range(train_iter):
-            #if it % 10 == 0:
-            if True:
-                refined_gaussian.append(gaussian_data.detach().clone())
+            '''
+            # Uncomment this for step-by-step data distillation analysis
+            refined_gaussian.append(gaussian_data.detach().clone())
+            '''
 
             teacher_model.zero_grad()
             optimizer.zero_grad()
@@ -144,56 +142,56 @@ def get_distill_data(teacher_model,
                 hook.clear()
             length = torch.tensor([seqlen] * batch_size).cuda()
             gd = gaussian_data
-            #v = gd.std(axis=-1, keepdim=True)
-            #m = gd.mean(axis=-1, keepdim=True)
-            #gd = (gd - m) / v
-            #gd = torch.clamp(gd, min=-4., max=4.)
-            #encoded, encoded_len, encoded_scaling_factor = teacher_model(gaussian_data, length) # encoder
+            '''
+            # Uncomment this for data normalization and clipping before the encoder layer
+            v = gd.std(axis=-1, keepdim=True)
+            m = gd.mean(axis=-1, keepdim=True)
+            gd = (gd - m) / v
+            gd = torch.clamp(gd, min=-4., max=4.)
+            '''
             encoded, encoded_len, encoded_scaling_factor = teacher_model(gd, length) # encoder
             log_probs = teacher_model_decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
             log_probs_red = log_probs.max(axis=-1).values[-1]
-            #print(log_probs_red.shape)
-            #print(log_probs.tolist())
 
-            #mean_loss = Variable(torch.zeros(1).cuda(), requires_grad=True)
-            #std_loss = Variable(torch.zeros(1).cuda(), requires_grad=True)
             mean_loss = 0
             std_loss = 0
 
             # compute the loss according to the BatchNorm statistics and the statistics of intermediate output
             for cnt, (bn_stat, hook) in enumerate(zip(bn_stats, hooks)):
-                #print(mean_loss)
                 conv_output = hook.outputs
                 bn_mean, bn_std = bn_stat[0], bn_stat[1]
                 conv_mean = torch.mean(conv_output[0], dim=(0, 2))
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
-                #print('conv mean', conv_mean)
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
                 mean_loss += own_loss(bn_mean, conv_mean)
                 std_loss += own_loss(bn_std * bn_std, conv_var)
 
             bn_loss = mean_loss + std_loss
+            total_loss = bn_loss
+
+            '''
+            # Uncomment this for regularization
+            x = (gd[:, :, 1:] - gd[:, :, :-1]).abs()
+            x = (x[:, 1:, :] - x[:, :-1, :]).abs()
+            tv_grad = x.mean()
+            total_loss += alpha * tv_grad # by default, alpha==0
+
+            log_prob_loss = log_probs_red.mean().abs()
+            total_loss += beta * log_prob_loss
+            '''
+
+            '''
+            # Uncomment this for logging
             l2_norm = torch.sqrt(gd * gd).mean()
             print(float(gd.min()), float(gd.max()), float(l2_norm))
-            log_prob_loss = log_probs_red.mean().abs()
-            total_loss = bn_loss  + beta * log_prob_loss
-
-            x = (gd[:, :, 1:] - gd[:, :, :-1]).abs()
-            #x = (x ** 2).sqrt()
-            #print(x.isnan().sum())
-            x = (x[:, 1:, :] - x[:, :-1, :]).abs()
-            #print(x.isnan().sum())
-            #x = (x ** 2).sqrt()
-            norm = x.mean()
-            print('Norm?', norm)
-            total_loss += alpha * norm
-
-            print('Log prob mean', float(log_prob_loss))
+            print('TV gradient regularization', float(tv_grad))
+            #print('Log prob mean', float(log_prob_loss))
             print('bn_loss', float(bn_loss))
             print('total loss:', float(total_loss))
-            print(len(refined_gaussian))
             print()
+            '''
+
             total_loss.backward()
             optimizer.step()
             scheduler.step(total_loss.item())
