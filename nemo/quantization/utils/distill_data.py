@@ -45,7 +45,7 @@ def own_loss(A, B):
 	L-2 loss between A and B normalized by length.
     Shape of A should be (features_num, ), shape of B should be (batch_size, features_num)
 	"""
-    return (A - B).norm()**2 / B.size(0)
+    return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
 
 class output_hook(object):
     """
@@ -164,8 +164,14 @@ def get_distill_data(teacher_model,
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
-                mean_loss += own_loss(bn_mean, conv_mean)
-                std_loss += own_loss(bn_std * bn_std, conv_var)
+                mean_loss_ = own_loss(bn_mean, conv_mean)
+                std_loss_ = own_loss(bn_std * bn_std, conv_var)
+                mean_loss += mean_loss_ 
+                std_loss += std_loss_
+                #print(cnt)
+                #print(float(bn_mean.abs().max()), float(bn_mean.abs().mean()), float(mean_loss_))
+                #print(float(bn_std.max()), float(bn_std.mean()), float(std_loss_))
+                #print()
 
             bn_loss = mean_loss + std_loss
             total_loss = bn_loss
@@ -181,15 +187,15 @@ def get_distill_data(teacher_model,
             total_loss += beta * log_prob_loss
             '''
 
-            '''
             # Uncomment this for logging
             l2_norm = torch.sqrt(gd * gd).mean()
             print(float(gd.min()), float(gd.max()), float(l2_norm))
-            print('TV gradient regularization', float(tv_grad))
+            #print('TV gradient regularization', float(tv_grad))
             #print('Log prob mean', float(log_prob_loss))
-            print('bn_loss', float(bn_loss))
+            #print('bn_loss', float(bn_loss))
             print('total loss:', float(total_loss))
             print()
+            '''
             '''
 
             total_loss.backward()

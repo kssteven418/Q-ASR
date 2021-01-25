@@ -133,8 +133,8 @@ def main():
                 print('model dumped as ', file_name)
                 with open(file_name, 'wb') as f:
                     pickle.dump(distilled_data, f)
-                #with open('cpu_'+file_name, 'wb') as f:
-                #    pickle.dump([x.cpu() for x in distilled_data], f)
+                with open('cpu_'+file_name, 'wb') as f:
+                    pickle.dump([x.cpu() for x in distilled_data], f)
 
     torch.set_grad_enabled(False) # disable backward graph generation
     asr_model.eval() # evaluation mode
