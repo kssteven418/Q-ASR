@@ -13,20 +13,23 @@
 # limitations under the License.
 
 """
-This script serves three goals:
-    (1) Demonstrate how to use NeMo Models outside of PytorchLightning
-    (2) Shows example of batch ASR inference
-    (3) Serves as CI test for pre-trained checkpoint
-"""
-
-"""
 From NeMo/examples/asr/speech_to_text_infer.py
 Usage: 
-    python speech_to_text_infer.py --asr_model=QuartzNet15x5Base-En --dataset=/rscratch/data/librispeech/dev_clean.json
-To store the model: 
-    add --store_model={path}/{name}.nemo
-    Then, you can recover the model with --asr_model={path}/{name}.nemo
+    python inference.py \
+    --asr_model /rscratch/data/librispeech/nemo_models/QuartzNet15x5Base-En.nemo  \
+    --dataset /rscratch/data/librispeech/dev_other.json  
 
+You can also specify `--distill_dump [filename]` to store the distilled data
+Then, you can load the distilled data by `--distill_load [path]` to avoid distillation stage for the next runs
+
+By default, distillation is enabled and is executed with:
+    * training iteration = 300
+    * batch size = 8
+    * number of batches = 50 (thereby 8 * 50 = 400 data in total)
+You can change this dafault setting by specifying e.g., `--distill_train_iter 100  --batch_size 4 --distill_num_batch 10`
+
+Finally, you can enable dynamic quantization mode by specifying `--dynamic`
+This will skip distillation and calibration stages as they are unnecessary
 """
 
 from argparse import ArgumentParser
