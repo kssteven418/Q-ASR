@@ -45,7 +45,8 @@ def own_loss(A, B):
 	L-2 loss between A and B normalized by length.
     Shape of A should be (features_num, ), shape of B should be (batch_size, features_num)
 	"""
-    return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
+    #return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
+    return (A - B).norm()**2 / (B.size(0))
 
 class output_hook(object):
     """
@@ -193,7 +194,7 @@ def get_distill_data(teacher_model,
             #print('TV gradient regularization', float(tv_grad))
             #print('Log prob mean', float(log_prob_loss))
             #print('bn_loss', float(bn_loss))
-            print('total loss:', float(total_loss))
+            print('total loss:', it, float(total_loss))
             print()
             '''
             '''
