@@ -125,7 +125,7 @@ def get_distill_data(teacher_model,
         gaussian_data = gaussian_data.cuda()
         gaussian_data.requires_grad = True
         crit = nn.CrossEntropyLoss().cuda()
-        optimizer = optim.Adam([gaussian_data], lr=0.05)
+        optimizer = optim.Adam([gaussian_data], lr=0.01)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                          min_lr=1e-4,
                                                          verbose=True,
