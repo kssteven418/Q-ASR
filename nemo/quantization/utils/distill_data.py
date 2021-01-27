@@ -40,13 +40,15 @@ def get_random_data(batch_size=32, dim=64, seqlen=500):
                              num_workers=32)
     return data_loader
 
-def own_loss(A, B):
+def own_loss(A, B, normalize):
     """
 	L-2 loss between A and B normalized by length.
     Shape of A should be (features_num, ), shape of B should be (batch_size, features_num)
 	"""
-    #return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
-    return (A - B).norm()**2 / (B.size(0))
+    if normalize:
+        return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
+    else:
+        return (A - B).norm()**2 / (B.size(0))
 
 class output_hook(object):
     """
@@ -84,6 +86,7 @@ def get_distill_data(teacher_model,
                      num_batch=1,
                      alpha=0,
                      beta=0,
+                     normalize=True,
                      ):
     """
     Generate distilled data according to the BatchNorm statistics in the pretrained single-precision model.
@@ -165,8 +168,8 @@ def get_distill_data(teacher_model,
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
-                mean_loss_ = own_loss(bn_mean, conv_mean)
-                std_loss_ = own_loss(bn_std * bn_std, conv_var)
+                mean_loss_ = own_loss(bn_mean, conv_mean, normalize=normalize)
+                std_loss_ = own_loss(bn_std * bn_std, conv_var, normalize=normalize)
                 mean_loss += mean_loss_ 
                 std_loss += std_loss_
                 #print(cnt)
@@ -190,14 +193,13 @@ def get_distill_data(teacher_model,
 
             # Uncomment this for logging
             l2_norm = torch.sqrt(gd * gd).mean()
-            print(float(gd.min()), float(gd.max()), float(l2_norm))
-            #print('TV gradient regularization', float(tv_grad))
-            #print('Log prob mean', float(log_prob_loss))
-            #print('bn_loss', float(bn_loss))
-            print('total loss:', it, float(total_loss))
-            print()
-            '''
-            '''
+            if it % 20 == 0:
+                print(float(gd.min()), float(gd.max()), float(l2_norm))
+                #print('TV gradient regularization', float(tv_grad))
+                #print('Log prob mean', float(log_prob_loss))
+                #print('bn_loss', float(bn_loss))
+                print('total loss:', it, float(total_loss))
+                print()
 
             total_loss.backward()
             optimizer.step()
