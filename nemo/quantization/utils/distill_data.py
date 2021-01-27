@@ -100,6 +100,7 @@ def get_distill_data(teacher_model,
                      beta=0,
                      normalize=True,
                      three_sigma=False,
+                     lr=0.01,
                      ):
     """
     Generate distilled data according to the BatchNorm statistics in the pretrained single-precision model.
@@ -137,12 +138,12 @@ def get_distill_data(teacher_model,
     for i, gaussian_data in enumerate(dataloader):
         if i == num_batch:
             break
-        print('Distillation: %s / %s' % (i+1, num_batch), alpha)
+        print('Distillation: %s / %s' % (i+1, num_batch), alpha, lr)
         # initialize the criterion, optimizer, and scheduler
         gaussian_data = gaussian_data.cuda()
         gaussian_data.requires_grad = True
         crit = nn.CrossEntropyLoss().cuda()
-        optimizer = optim.Adam([gaussian_data], lr=0.01)
+        optimizer = optim.Adam([gaussian_data], lr=lr)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                          min_lr=1e-4,
                                                          verbose=True,
