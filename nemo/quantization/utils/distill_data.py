@@ -50,6 +50,18 @@ def own_loss(A, B, normalize):
     else:
         return (A - B).norm()**2 / (B.size(0))
 
+def three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize):
+    A = bn_mean + 3 * bn_std
+    B = conv_mean + 3 * conv_std
+    #print(A.shape, B.shape)
+    #print(A.max(), A.min(), A.mean())
+    #print(B.max(), B.min(), B.mean())
+    #print(conv_std.isnan().sum())
+    if normalize:
+        return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
+    else:
+        return (A - B).norm()**2 / (B.size(0))
+
 class output_hook(object):
     """
 	Forward_hook used to get the output of the intermediate layer. 
@@ -87,6 +99,7 @@ def get_distill_data(teacher_model,
                      alpha=0,
                      beta=0,
                      normalize=True,
+                     three_sigma=False,
                      ):
     """
     Generate distilled data according to the BatchNorm statistics in the pretrained single-precision model.
@@ -168,10 +181,15 @@ def get_distill_data(teacher_model,
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
-                mean_loss_ = own_loss(bn_mean, conv_mean, normalize=normalize)
-                std_loss_ = own_loss(bn_std * bn_std, conv_var, normalize=normalize)
-                mean_loss += mean_loss_ 
-                std_loss += std_loss_
+                if not three_sigma:
+                    mean_loss_ = own_loss(bn_mean, conv_mean, normalize=normalize)
+                    std_loss_ = own_loss(bn_std * bn_std, conv_var, normalize=normalize)
+                    mean_loss += mean_loss_ 
+                    std_loss += std_loss_
+                else:
+                    conv_std = (conv_var + eps) ** 0.5 
+                    mean_loss_ = three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize=normalize)
+                    mean_loss += mean_loss_ 
                 #print(cnt)
                 #print(float(bn_mean.abs().max()), float(bn_mean.abs().mean()), float(mean_loss_))
                 #print(float(bn_std.max()), float(bn_std.mean()), float(std_loss_))
@@ -193,7 +211,7 @@ def get_distill_data(teacher_model,
 
             # Uncomment this for logging
             l2_norm = torch.sqrt(gd * gd).mean()
-            if it % 20 == 0:
+            if it % 1 == 0:
                 print(float(gd.min()), float(gd.max()), float(l2_norm))
                 #print('TV gradient regularization', float(tv_grad))
                 #print('Log prob mean', float(log_prob_loss))
