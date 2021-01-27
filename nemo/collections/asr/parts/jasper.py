@@ -129,9 +129,14 @@ class MaskedConv1d(nn.Module):
         bias=False,
         use_mask=True,
         quant_mode='none',
+        quant_bit=8,
+        asymmetric=False,
+        name='',
     ):
         super(MaskedConv1d, self).__init__()
         self.quant_mode = quant_mode
+        self.quant_bit = quant_bit
+        self.asymmetric = asymmetric
 
         if not (heads == -1 or groups == in_channels):
             raise ValueError("Only use heads for depthwise convolutions")
@@ -152,9 +157,14 @@ class MaskedConv1d(nn.Module):
             groups=groups,
             bias=bias,
         )
-        self.act = QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
-        self.conv = QuantConv1d(8, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
-        self.act1 = QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
+
+        self.act_quant_bit = self.quant_bit
+        if self.asymmetric:
+            self.act_quant_bit += 1 # This has the same effect as using the asymmetric quantization w. bias 0
+
+        self.act = QuantAct(self.act_quant_bit, quant_mode=self.quant_mode, per_channel=False, name=name+'_act')
+        self.conv = QuantConv1d(self.quant_bit, bias_bit=32, quant_mode=self.quant_mode, 
+                per_channel=True, name=name+'_conv')
         self.conv.set_param(conv)
 
         self.use_mask = use_mask
@@ -168,12 +178,22 @@ class MaskedConv1d(nn.Module):
     def bn_folding(self, bn):
         self.conv.bn_folding(bn)
 
+    def set_quant_bit(self, quant_bit):
+        self.quant_bit = quant_bit
+        self.act_quant_bit = self.quant_bit
+        if self.asymmetric:
+            self.act_quant_bit += 1
+
+        self.conv.weight_bit = quant_bit
+        self.act.activation_bit = self.act_quant_bit
+
     def set_quant_mode(self, quant_mode):
         self.quant_mode = quant_mode
         self.conv.quant_mode = quant_mode
         self.act.quant_mode = quant_mode
 
     def forward(self, x, lens, scaling_factor=None):
+        assert not(float(x.min()) < -1e-5 and self.asymmetric)
         if self.use_mask:
             lens = lens.to(dtype=torch.long)
             max_len = x.size(2)
@@ -302,6 +322,8 @@ class JasperBlock(nn.Module):
         se_interpolation_mode='nearest',
         stride_last=False,
         quant_mode='none', 
+        quant_bit=8, 
+        layer_num=-1,
     ):
         super(JasperBlock, self).__init__()
 
@@ -320,6 +342,9 @@ class JasperBlock(nn.Module):
         self.residual_mode = residual_mode
         self.se = se
         self.quant_mode = quant_mode
+        self.quant_bit = quant_bit
+        self.layer_num = layer_num
+        self.name = 'jb%d' % self.layer_num
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
@@ -347,6 +372,9 @@ class JasperBlock(nn.Module):
                     normalization=normalization,
                     norm_groups=norm_groups,
                     quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    is_first_layer=(self.layer_num==0 and i==0),
+                    name=self.name+('_conv%d' % i)
                 )
             )
 
@@ -368,6 +396,9 @@ class JasperBlock(nn.Module):
                 normalization=normalization,
                 norm_groups=norm_groups,
                 quant_mode=quant_mode,
+                quant_bit=quant_bit,
+                is_first_layer=(self.layer_num==0 and repeat==1),
+                name=self.name+('_conv%d' % (repeat-1))
             )
         )
 
@@ -399,7 +430,7 @@ class JasperBlock(nn.Module):
             if len(residual_panes) == 0:
                 res_panes = [inplanes]
                 self.dense_residual = False
-            for ip in res_panes:
+            for i, ip in enumerate(res_panes):
                 res = nn.ModuleList(
                     self._get_conv_bn_layer(
                         ip,
@@ -409,6 +440,9 @@ class JasperBlock(nn.Module):
                         norm_groups=norm_groups,
                         stride=stride_val,
                         quant_mode=quant_mode,
+                        quant_bit=quant_bit,
+                        is_first_layer=(self.layer_num==0),
+                        name=self.name+('_res%d' % i)
                     )
                 )
 
@@ -418,7 +452,7 @@ class JasperBlock(nn.Module):
         else:
             self.res = None
 
-        self.res_act =  QuantAct(8, quant_mode=self.quant_mode, per_channel=False)
+        self.res_act =  QuantAct(self.quant_bit, quant_mode=self.quant_mode, per_channel=False, name=self.name+('_res_act'))
         self.mout = nn.Sequential(*self._get_act_dropout_layer(drop_prob=dropout, activation=activation))
 
 
@@ -447,6 +481,19 @@ class JasperBlock(nn.Module):
                 res.append(res_list)
             self.res = res
 
+    def set_quant_bit(self, quant_bit):
+        self.quant_bit = quant_bit
+        if self.mconv is not None:
+            for l in self.mconv:
+                if isinstance(l, MaskedConv1d):
+                    l.set_quant_bit(quant_bit)
+        if self.res is not None:
+            for _l in self.res: # for all residual connections
+                for l in _l: # for all operations in a residual connection
+                    if isinstance(l, MaskedConv1d):
+                        l.set_quant_bit(quant_bit)
+        self.res_act.activation_bit = quant_bit
+
     def set_quant_mode(self, quant_mode):
         self.quant_mode = quant_mode
         if self.mconv is not None:
@@ -473,6 +520,9 @@ class JasperBlock(nn.Module):
         heads=-1,
         separable=False,
         quant_mode='none',
+        quant_bit=8,
+        asymmetric=False,
+        name='',
     ):
         use_mask = self.conv_mask
         if use_mask:
@@ -488,6 +538,9 @@ class JasperBlock(nn.Module):
                 heads=heads,
                 use_mask=use_mask,
                 quant_mode=quant_mode,
+                quant_bit=quant_bit,
+                asymmetric=asymmetric,
+                name=name,
             )
         else:
             assert quant_mode == 'none', 'Quantization mode only supports convolution with mask currently.'
@@ -517,6 +570,9 @@ class JasperBlock(nn.Module):
         normalization="batch",
         norm_groups=1,
         quant_mode='none',
+        quant_bit=8,
+        is_first_layer=False,
+        name='',
     ):
         if norm_groups == -1:
             norm_groups = out_channels
@@ -534,6 +590,9 @@ class JasperBlock(nn.Module):
                     groups=in_channels,
                     heads=heads,
                     quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    asymmetric=(not is_first_layer),
+                    name=name+'_dw',
                 ),
                 self._get_conv(
                     in_channels,
@@ -545,6 +604,9 @@ class JasperBlock(nn.Module):
                     bias=bias,
                     groups=groups,
                     quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    asymmetric=False,
+                    name=name+'_pw',
                 ),
             ]
         else:
@@ -559,6 +621,9 @@ class JasperBlock(nn.Module):
                     bias=bias,
                     groups=groups,
                     quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    asymmetric=(not is_first_layer),
+                    name=name,
                 )
             ]
 

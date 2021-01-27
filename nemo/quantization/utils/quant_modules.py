@@ -41,7 +41,9 @@ class QuantAct(Module):
                  per_channel=False,
                  channel_len=None,
                  quant_mode="none",
-                 dynamic=False):
+                 dynamic=False,
+                 name="", 
+                ):
         super(QuantAct, self).__init__()
 
         self.activation_bit = activation_bit
@@ -49,6 +51,7 @@ class QuantAct(Module):
         self.running_stat = running_stat
         self.quant_mode = quant_mode
         self.percentile = False
+        self.name = name
 
         if not per_channel:
             self.register_buffer('x_min', torch.zeros(1))
@@ -101,6 +104,7 @@ class QuantAct(Module):
                 specified_min=None,
                 specified_max=None):
         # collect runnng stats
+        #print('Act', self.activation_bit)
         x_act = x if identity is None else identity + x
         if self.running_stat:
             if not self.percentile:
@@ -150,11 +154,9 @@ class QuantAct(Module):
             x_min = self.x_min if specified_min is None else specified_min
             x_max = self.x_max if specified_max is None else specified_max
 
-        #print(x_min, x.min(), self.x_min)
-        #print(x_max, x.max(), self.x_max)
-
         x_min = x_min.view(1, -1, 1)
         x_max = x_max.view(1, -1, 1)
+
 
         act_scaling_factor = symmetric_linear_quantization_params(
             self.activation_bit, x_min, x_max, 
@@ -190,7 +192,9 @@ class QuantConv1d(Module):
                  per_channel=False,
                  fix_flag=False,
                  fix_bn = True,
-                 weight_percentile=0):
+                 weight_percentile=0,
+                 name="", 
+                ):
         super(QuantConv1d, self).__init__()
         self.weight_bit = weight_bit
         self.per_channel = per_channel
@@ -203,6 +207,7 @@ class QuantConv1d(Module):
         self.percentile_mode = False
         self.fix_bn = fix_bn
         self.update_bn = True
+        self.name = name
 
         if self.quant_mode == "symmetric":
             self.weight_function = SymmetricQuantFunction.apply

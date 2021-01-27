@@ -224,6 +224,7 @@ class fixedpoint_mul(Function):
         else:
             n = 2 ** bit_num - 1
 
+
         with torch.no_grad():
             pre_act_scaling_factor = reshape(pre_act_scaling_factor)
             if identity is not None:
@@ -257,7 +258,8 @@ class fixedpoint_mul(Function):
 
                 output = output1 + output
 
-            if bit_num in [4, 8, 16]:
+            #if bit_num in [4, 8, 16]:
+            if True: #TODO what is this for?
                 if quant_mode == 'symmetric':
                     return torch.clamp( output.type(torch.float), -n - 1, n)
                 else:
