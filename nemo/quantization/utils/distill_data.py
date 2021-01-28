@@ -50,17 +50,26 @@ def own_loss(A, B, normalize):
     else:
         return (A - B).norm()**2 / (B.size(0))
 
+'''
 def three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize):
     A = bn_mean + 3 * bn_std
     B = conv_mean + 3 * conv_std
-    #print(A.shape, B.shape)
-    #print(A.max(), A.min(), A.mean())
-    #print(B.max(), B.min(), B.mean())
-    #print(conv_std.isnan().sum())
     if normalize:
         return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
     else:
         return (A - B).norm()**2 / (B.size(0))
+'''
+
+def three_sigma_loss(m1, m2, s1, s2, normalize):
+    #TODO: move this to a separate function
+    # Hellinger distance
+
+    v1 = s1 ** 2
+    v2 = s2 ** 2
+    exponent = -0.25 * (m1 - m2) ** 2 / (v1 + v2)
+    factor = (2 * s1 * s2 / (v1 + v2)) ** 0.5
+    loss = 1 - factor * torch.exp(exponent)
+    return loss.sum(), len(loss)
 
 class output_hook(object):
     """
@@ -173,6 +182,7 @@ def get_distill_data(teacher_model,
 
             mean_loss = 0
             std_loss = 0
+            length = 0
 
             # compute the loss according to the BatchNorm statistics and the statistics of intermediate output
             for cnt, (bn_stat, hook) in enumerate(zip(bn_stats, hooks)):
@@ -189,14 +199,17 @@ def get_distill_data(teacher_model,
                     std_loss += std_loss_
                 else:
                     conv_std = (conv_var + eps) ** 0.5 
-                    mean_loss_ = three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize=normalize)
+                    mean_loss_, len_ = three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize=normalize)
                     mean_loss += mean_loss_ 
+                    length += len_
                 #print(cnt)
                 #print(float(bn_mean.abs().max()), float(bn_mean.abs().mean()), float(mean_loss_))
                 #print(float(bn_std.max()), float(bn_std.mean()), float(std_loss_))
                 #print()
 
             bn_loss = mean_loss + std_loss
+            if length != 0:
+                bn_loss = bn_loss / length
             total_loss = bn_loss
 
             '''
