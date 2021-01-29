@@ -60,16 +60,19 @@ def three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize):
         return (A - B).norm()**2 / (B.size(0))
 '''
 
-def three_sigma_loss(m1, m2, s1, s2, normalize):
+def three_sigma_loss(m1, m2, s1, s2, output, normalize):
     #TODO: move this to a separate function
     # Hellinger distance
 
     v1 = s1 ** 2
     v2 = s2 ** 2
+    #print(float(output.min()), float(output.mean()), float(output.max()))
     exponent = -0.25 * (m1 - m2) ** 2 / (v1 + v2)
     factor = (2 * s1 * s2 / (v1 + v2)) ** 0.5
     loss = 1 - factor * torch.exp(exponent)
-    return loss.sum(), len(loss)
+    l2 = ((output ** 2).mean(axis=0).mean(axis=-1) + 1e-6).sqrt()
+    #print(loss.sum(), l2.sum())
+    return loss.sum(), l2.sum(), len(loss)
 
 class output_hook(object):
     """
@@ -199,8 +202,8 @@ def get_distill_data(teacher_model,
                     std_loss += std_loss_
                 else:
                     conv_std = (conv_var + eps) ** 0.5 
-                    mean_loss_, len_ = three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize=normalize)
-                    mean_loss += mean_loss_ 
+                    mean_loss_, l2_, len_ = three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, conv_output[0], normalize=normalize)
+                    mean_loss += mean_loss_ + alpha * l2_
                     length += len_
                 #print(cnt)
                 #print(float(bn_mean.abs().max()), float(bn_mean.abs().mean()), float(mean_loss_))
