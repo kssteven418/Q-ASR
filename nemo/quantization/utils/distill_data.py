@@ -193,6 +193,9 @@ def get_distill_data(teacher_model,
                 bn_mean, bn_std = bn_stat[0], bn_stat[1]
                 conv_mean = torch.mean(conv_output[0], dim=(0, 2))
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
+                if cnt == 0:
+                    print(float(bn_stat[0][0]), float(bn_stat[1][0]) ** 2)
+                    print(float(conv_mean[0]), float(conv_var[0]))
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
                 if not three_sigma:
