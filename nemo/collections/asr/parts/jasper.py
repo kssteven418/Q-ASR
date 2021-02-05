@@ -345,6 +345,7 @@ class JasperBlock(nn.Module):
         self.quant_bit = quant_bit
         self.layer_num = layer_num
         self.name = 'jb%d' % self.layer_num
+        self.bn_names = []
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
@@ -636,6 +637,7 @@ class JasperBlock(nn.Module):
             layers.append(nn.GroupNorm(num_groups=1, num_channels=out_channels))
         elif normalization == "batch":
             layers.append(nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.1))
+            self.bn_names.append(name+'_pw')
         else:
             raise ValueError(
                 f"Normalization method ({normalization}) does not match" f" one of [batch, layer, group, instance]."
@@ -669,6 +671,8 @@ class JasperBlock(nn.Module):
         #out_scaling_factor = input_scaling_factor
 
         lens = lens_orig
+        idx = 0
+        file_path = '/rscratch/sehoonkim/workspace/squeezeasr/squeezeasr/bn_stats/'
         for i, l in enumerate(self.mconv):
             #print('mconv', type(l))
             # if we're doing masked convolutions, we need to pass in and
@@ -677,6 +681,12 @@ class JasperBlock(nn.Module):
             if isinstance(l, MaskedConv1d):
                 out, lens, out_scaling_factor = l(out, lens, out_scaling_factor)
             else:
+                #if isinstance(l, nn.BatchNorm1d):
+                #    import pickle
+                #    stats = [l.running_mean, l.running_var]
+                #    with open(file_path + self.bn_names[idx] + '.pkl', 'wb') as f:
+                #        pickle.dump(stats, f)
+                #    idx += 1
                 out = l(out)
 
         # compute the residuals
@@ -692,6 +702,12 @@ class JasperBlock(nn.Module):
                         res_out, _, res_out_scaling_factor = \
                                 res_layer(res_out, lens_orig, res_out_scaling_factor)
                     else:
+                        #if isinstance(l, nn.BatchNorm1d):
+                        #    import pickle
+                        #    stats = [l.running_mean, l.running_var]
+                        #    with open(file_path + self.bn_names[idx] + '.pkl', 'wb') as f:
+                        #        pickle.dump(stats, f)
+                        #    idx += 1
                         res_out = res_layer(res_out)
 
                 if self.residual_mode == 'add' or self.residual_mode == 'stride_add':
