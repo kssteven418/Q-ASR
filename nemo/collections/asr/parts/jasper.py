@@ -21,6 +21,7 @@ from torch import Tensor
 
 from nemo.collections.asr.parts.activations import Swish
 from nemo.quantization.utils.quant_modules import * 
+import pickle
 
 jasper_activations = {"hardtanh": nn.Hardtanh, "relu": nn.ReLU, "selu": nn.SELU, "swish": Swish}
 
@@ -137,6 +138,7 @@ class MaskedConv1d(nn.Module):
         self.quant_mode = quant_mode
         self.quant_bit = quant_bit
         self.asymmetric = asymmetric
+        self.name = name
 
         if not (heads == -1 or groups == in_channels):
             raise ValueError("Only use heads for depthwise convolutions")
@@ -345,7 +347,7 @@ class JasperBlock(nn.Module):
         self.quant_bit = quant_bit
         self.layer_num = layer_num
         self.name = 'jb%d' % self.layer_num
-        self.bn_names = []
+        self.cnt = 0
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
@@ -637,7 +639,6 @@ class JasperBlock(nn.Module):
             layers.append(nn.GroupNorm(num_groups=1, num_channels=out_channels))
         elif normalization == "batch":
             layers.append(nn.BatchNorm1d(out_channels, eps=1e-3, momentum=0.1))
-            self.bn_names.append(name+'_pw')
         else:
             raise ValueError(
                 f"Normalization method ({normalization}) does not match" f" one of [batch, layer, group, instance]."
@@ -671,23 +672,35 @@ class JasperBlock(nn.Module):
         #out_scaling_factor = input_scaling_factor
 
         lens = lens_orig
-        idx = 0
-        file_path = '/rscratch/sehoonkim/workspace/squeezeasr/squeezeasr/bn_stats/'
+        bn_file_path = None
+        #bn_file_path = '/rscratch/sehoonkim/workspace/squeezeasr/squeezeasr/bn_stats/bn/'
+        conv_file_path = None
+        #conv_file_path = '/rscratch/sehoonkim/workspace/squeezeasr/squeezeasr/bn_stats/%s/' % 'real_bs1'
+        prev_conv_name = ''
+        adj = False
         for i, l in enumerate(self.mconv):
-            #print('mconv', type(l))
-            # if we're doing masked convolutions, we need to pass in and
-            # possibly update the sequence lengths
-            # if (i % 4) == 0 and self.conv_mask:
             if isinstance(l, MaskedConv1d):
                 out, lens, out_scaling_factor = l(out, lens, out_scaling_factor)
+                prev_conv_name = l.name
+                # dump convolution outputs
+                if conv_file_path is not None:
+                    with open(conv_file_path + ('%d/' % self.cnt) + prev_conv_name + '.pkl', 'wb') as f:
+                        pickle.dump(out, f)
+                adj = True
             else:
-                #if isinstance(l, nn.BatchNorm1d):
-                #    import pickle
-                #    stats = [l.running_mean, l.running_var]
-                #    with open(file_path + self.bn_names[idx] + '.pkl', 'wb') as f:
-                #        pickle.dump(stats, f)
-                #    idx += 1
+                if isinstance(l, nn.BatchNorm1d):
+                    assert adj
+                    mean = l.running_mean
+                    std = l.running_var ** 0.5
+                    stats = [mean, std]
+                    # dump bn statistics
+                    if bn_file_path is not None:
+                        #print(prev_conv_name, float(mean[0]), float(std[0]))
+                        with open(bn_file_path + prev_conv_name + '.pkl', 'wb') as f:
+                            pickle.dump(stats, f)
+
                 out = l(out)
+                adj = False
 
         # compute the residuals
         if self.res is not None:
@@ -696,19 +709,32 @@ class JasperBlock(nn.Module):
                 assert self.residual_mode == 'add' or self.residual_mode == 'stride_add'
             for i, layer in enumerate(self.res):
                 res_out, res_out_scaling_factor = xs[i]
+                prev_conv_name = ''
+                adj = False
                 for j, res_layer in enumerate(layer):
                     #print('res', type(res_layer))
                     if isinstance(res_layer, MaskedConv1d):
                         res_out, _, res_out_scaling_factor = \
                                 res_layer(res_out, lens_orig, res_out_scaling_factor)
+                        prev_conv_name = res_layer.name
+                        # dump convolution outputs
+                        if conv_file_path is not None:
+                            with open(conv_file_path + ('%d/' % self.cnt) + prev_conv_name + '.pkl', 'wb') as f:
+                                pickle.dump(res_out, f)
+                        adj = True
                     else:
-                        #if isinstance(l, nn.BatchNorm1d):
-                        #    import pickle
-                        #    stats = [l.running_mean, l.running_var]
-                        #    with open(file_path + self.bn_names[idx] + '.pkl', 'wb') as f:
-                        #        pickle.dump(stats, f)
-                        #    idx += 1
+                        if isinstance(res_layer, nn.BatchNorm1d):
+                            assert adj
+                            mean = res_layer.running_mean
+                            std = res_layer.running_var ** 0.5
+                            stats = [mean, std]
+                            # dump bn statistics
+                            if bn_file_path is not None:
+                                #print(prev_conv_name, float(mean[0]), float(std[0]))
+                                with open(bn_file_path + prev_conv_name + '.pkl', 'wb') as f:
+                                    pickle.dump(stats, f)
                         res_out = res_layer(res_out)
+                        adj = False
 
                 if self.residual_mode == 'add' or self.residual_mode == 'stride_add':
                     #out = out + res_out
@@ -717,7 +743,7 @@ class JasperBlock(nn.Module):
 
                 else:
                     out = torch.max(out, res_out)
-
+        self.cnt += 1
         # compute the output
         out = self.mout(out)
 
