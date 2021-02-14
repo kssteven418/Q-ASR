@@ -50,18 +50,7 @@ def own_loss(A, B, normalize):
     else:
         return (A - B).norm()**2 / (B.size(0))
 
-'''
-def three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, normalize):
-    A = bn_mean + 3 * bn_std
-    B = conv_mean + 3 * conv_std
-    if normalize:
-        return (A - B).norm()**2 / (B.size(0) * A.norm()**2)
-    else:
-        return (A - B).norm()**2 / (B.size(0))
-'''
-
-def three_sigma_loss(m1, m2, s1, s2, output, normalize):
-    #TODO: move this to a separate function
+def hd_loss(m1, m2, s1, s2, output):
     # Hellinger distance
 
     v1 = s1 ** 2
@@ -71,7 +60,6 @@ def three_sigma_loss(m1, m2, s1, s2, output, normalize):
     factor = (2 * s1 * s2 / (v1 + v2)) ** 0.5
     loss = 1 - factor * torch.exp(exponent)
     l2 = ((output ** 2).mean(axis=0).mean(axis=-1) + 1e-6).sqrt()
-    #print(loss.sum(), l2.sum())
     return loss.sum(), l2.sum(), len(loss)
 
 class output_hook(object):
@@ -110,8 +98,7 @@ def get_distill_data(teacher_model,
                      num_batch=1,
                      alpha=0,
                      beta=0,
-                     normalize=True,
-                     three_sigma=False,
+                     loss_criterion='zeroq',
                      lr=0.01,
                      ):
     """
@@ -193,26 +180,21 @@ def get_distill_data(teacher_model,
                 bn_mean, bn_std = bn_stat[0], bn_stat[1]
                 conv_mean = torch.mean(conv_output[0], dim=(0, 2))
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
-                #if cnt == 0:
-                #    print(float(bn_stat[0][0]), float(bn_stat[1][0]) ** 2)
-                #    print(float(conv_mean[0]), float(conv_var[0]))
 
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
-                if not three_sigma:
+                if loss_criterion in ['zeroq', 'zeroq-norm']:
+                    normalize = ('norm' in loss_criterion)
                     mean_loss_ = own_loss(bn_mean, conv_mean, normalize=normalize)
                     std_loss_ = own_loss(bn_std * bn_std, conv_var, normalize=normalize)
                     mean_loss += mean_loss_ 
                     std_loss += std_loss_
                 else:
+                    assert loss_criterion == 'hd'
                     conv_std = (conv_var + eps) ** 0.5 
-                    mean_loss_, l2_, len_ = three_sigma_loss(bn_mean, conv_mean, bn_std, conv_std, conv_output[0], normalize=normalize)
+                    mean_loss_, l2_, len_ = hd_loss(bn_mean, conv_mean, bn_std, conv_std, conv_output[0])
                     mean_loss += mean_loss_ + alpha * l2_
                     length += len_
-                #print(cnt)
-                #print(float(bn_mean.abs().max()), float(bn_mean.abs().mean()), float(mean_loss_))
-                #print(float(bn_std.max()), float(bn_std.mean()), float(std_loss_))
-                #print()
 
             bn_loss = mean_loss + std_loss
             if length != 0:
@@ -233,10 +215,7 @@ def get_distill_data(teacher_model,
             # Uncomment this for logging
             l2_norm = torch.sqrt(gd * gd).mean()
             if it % 1 == 0:
-                print(float(gd.min()), float(gd.max()), float(l2_norm))
-                #print('TV gradient regularization', float(tv_grad))
-                #print('Log prob mean', float(log_prob_loss))
-                #print('bn_loss', float(bn_loss))
+                print('min, max, l2-norm:', float(gd.min()), float(gd.max()), float(l2_norm))
                 print('total loss:', it, float(total_loss))
                 print()
 
