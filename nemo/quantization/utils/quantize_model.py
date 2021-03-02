@@ -2,10 +2,23 @@ from nemo.quantization.utils.quant_modules import *
 
 list_all = [QuantAct, QuantLinear, QuantConv1d]
 
+def set_percentile(model, percentile: float):
+    if type(model) in list_all:
+        if type(model) == QuantAct:
+            model.set_percentile(percentile)
+    elif type(model) == nn.Sequential:
+        for n, m in model.named_children():
+            set_percentile(m, percentile)
+    elif type(model) == nn.ModuleList:
+        for n in model:
+            set_percentile(n, percentile)
+    else:
+        for attr in dir(model):
+            mod = getattr(model, attr)
+            if isinstance(mod, nn.Module):
+                set_percentile(mod, percentile)
+
 def adjust_range(model, scale: float):
-    """
-    freeze the activation range. Resursively invokes layer.fix()
-    """
     if type(model) in list_all:
         if type(model) == QuantAct:
             model.adjust_range(scale)
@@ -22,9 +35,6 @@ def adjust_range(model, scale: float):
                 adjust_range(mod, scale)
 
 def set_dynamic(model, update: bool):
-    """
-    freeze the activation range. Resursively invokes layer.fix()
-    """
     if type(model) in list_all:
         if type(model) == QuantAct:
             model.dynamic = update
@@ -41,9 +51,6 @@ def set_dynamic(model, update: bool):
                 set_dynamic(mod, update)
 
 def set_update_bn(model, update: bool):
-    """
-    freeze the activation range. Resursively invokes layer.fix()
-    """
     if type(model) in list_all:
         if type(model) == QuantConv1d:
             model.set_update_bn(update)
