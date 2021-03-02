@@ -42,6 +42,7 @@ class QuantAct(Module):
                  channel_len=None,
                  quant_mode="none",
                  dynamic=False,
+                 percentile=None,
                  name="", 
                 ):
         super(QuantAct, self).__init__()
@@ -50,7 +51,7 @@ class QuantAct(Module):
         self.act_range_momentum = act_range_momentum
         self.running_stat = running_stat
         self.quant_mode = quant_mode
-        self.percentile = False
+        self.percentile = percentile
         self.name = name
 
         if not per_channel:
@@ -97,6 +98,11 @@ class QuantAct(Module):
         self.x_min *= scale
         self.x_max *= scale
 
+    def set_percentile(self, percentile):
+        assert not self.per_channel, 'percentile mode is only available for the global quantization mode'
+        self.percentile = percentile
+        #print(self.percentile)
+
     def forward(self, x, 
                 pre_act_scaling_factor=None, 
                 identity=None, 
@@ -105,9 +111,10 @@ class QuantAct(Module):
                 specified_max=None):
         # collect runnng stats
         #print('Act', self.activation_bit)
+        quantile_min, quantile_max = None, None # avoid double computation
         x_act = x if identity is None else identity + x
         if self.running_stat:
-            if not self.percentile:
+            if self.percentile is None:
                 if not self.per_channel:
                     x_min = x_act.data.min()
                     x_max = x_act.data.max()
@@ -115,7 +122,11 @@ class QuantAct(Module):
                     x_min = x_act.data.min(axis=0).values.min(axis=-1).values
                     x_max = x_act.data.max(axis=0).values.max(axis=-1).values
             else:
-                raise NotImplementedError("percentile mode is not currently supported.")
+                assert not self.per_channel, 'percentile mode is only available for the global quantization mode'
+                quantile_min = torch.quantile(x_act, torch.tensor(1 - self.percentile / 100).cuda())
+                quantile_max = torch.quantile(x_act, torch.tensor(self.percentile / 100).cuda())
+                x_min = quantile_min.detach()
+                x_max = quantile_max.detach()
 
             # Initialization
             if torch.eq(self.x_min, self.x_max).all():
@@ -148,8 +159,16 @@ class QuantAct(Module):
                     x_min = x_act.data.min(axis=0).values.min(axis=-1).values
                     x_max = x_act.data.max(axis=0).values.max(axis=-1).values
             else:
-                raise NotImplementedError("percentile mode is not currently supported.")
-
+                assert not self.per_channel, 'percentile mode is only available for the global quantization mode'
+                # avoid quantile computation if already computed above
+                if quantile_min is None:
+                    x_min = torch.quantile(x_act, torch.tensor(1 - self.percentile / 100).cuda())
+                else:
+                    x_min = quantile_min
+                if quantile_max is None:
+                    x_max = torch.quantile(x_act, torch.tensor(self.percentile / 100).cuda())
+                else:
+                    x_max = quantile_max
         else:
             x_min = self.x_min if specified_min is None else specified_min
             x_max = self.x_max if specified_max is None else specified_max
