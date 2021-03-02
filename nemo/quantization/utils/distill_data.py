@@ -50,17 +50,26 @@ def own_loss(A, B, normalize):
     else:
         return (A - B).norm()**2 / (B.size(0))
 
-def hd_loss(m1, m2, s1, s2, output):
-    # Hellinger distance
 
-    v1 = s1 ** 2
-    v2 = s2 ** 2
-    #print(float(output.min()), float(output.mean()), float(output.max()))
-    exponent = -0.25 * (m1 - m2) ** 2 / (v1 + v2)
-    factor = (2 * s1 * s2 / (v1 + v2)) ** 0.5
+def l2_loss(bn_mean, bn_std, tmp_mean, tmp_std, normalize):
+    mean_loss = own_loss(bn_mean, tmp_mean, normalize)
+    std_loss = own_loss(bn_std, tmp_std, normalize)
+    return mean_loss + std_loss
+
+def kl_loss(bn_mean, bn_std, tmp_mean, tmp_std):
+    a = torch.log(tmp_std / bn_std)
+    c = (bn_std ** 2 + (bn_mean - tmp_mean) ** 2) / tmp_std ** 2
+    b = 0.5 * (1 - c)
+    loss = a - b
+    return loss.mean()
+
+def hd_loss(bn_mean, bn_std, tmp_mean, tmp_std):
+    v1 = bn_std ** 2
+    v2 = tmp_std ** 2
+    exponent = -0.25 * (bn_mean - tmp_mean) ** 2 / (v1 + v2)
+    factor = (2 * bn_std * tmp_std / (v1 + v2)) ** 0.5
     loss = 1 - factor * torch.exp(exponent)
-    l2 = ((output ** 2).mean(axis=0).mean(axis=-1) + 1e-6).sqrt()
-    return loss.sum(), l2.sum(), len(loss)
+    return loss.mean()
 
 class output_hook(object):
     """
@@ -170,9 +179,9 @@ def get_distill_data(teacher_model,
             log_probs = teacher_model_decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
             log_probs_red = log_probs.max(axis=-1).values[-1]
 
-            mean_loss = 0
-            std_loss = 0
-            length = 0
+            total_loss = 0
+            total_max = 0
+            cnt = 0
 
             # compute the loss according to the BatchNorm statistics and the statistics of intermediate output
             for cnt, (bn_stat, hook) in enumerate(zip(bn_stats, hooks)):
@@ -180,26 +189,26 @@ def get_distill_data(teacher_model,
                 bn_mean, bn_std = bn_stat[0], bn_stat[1]
                 conv_mean = torch.mean(conv_output[0], dim=(0, 2))
                 conv_var = torch.var(conv_output[0] + eps, dim=(0, 2))
+                conv_std = torch.sqrt(conv_var + eps)
 
                 assert bn_mean.shape == conv_mean.shape
                 assert bn_std.shape == conv_var.shape
                 if loss_criterion in ['zeroq', 'zeroq-norm']:
                     normalize = ('norm' in loss_criterion)
-                    mean_loss_ = own_loss(bn_mean, conv_mean, normalize=normalize)
-                    std_loss_ = own_loss(bn_std * bn_std, conv_var, normalize=normalize)
-                    mean_loss += mean_loss_ 
-                    std_loss += std_loss_
+                    total_loss += l2_loss(bn_mean, bn_std, conv_mean, conv_std, normalize)
+                elif loss_criterion == 'kl':
+                    total_loss += kl_loss(bn_mean, bn_std, conv_mean, conv_std)
                 else:
                     assert loss_criterion == 'hd'
-                    conv_std = (conv_var + eps) ** 0.5 
-                    mean_loss_, l2_, len_ = hd_loss(bn_mean, conv_mean, bn_std, conv_std, conv_output[0])
-                    mean_loss += mean_loss_ + alpha * l2_
-                    length += len_
+                    total_loss += hd_loss(bn_mean, bn_std, conv_mean, conv_std)
 
-            bn_loss = mean_loss + std_loss
-            if length != 0:
-                bn_loss = bn_loss / length
-            total_loss = bn_loss
+                output = conv_output[0]
+                total_max += output.max()
+                cnt += 1
+
+            total_max = total_max / cnt
+            #print(total_loss, total_max)
+            total_loss += alpha * total_max
 
             '''
             # Uncomment this for regularization
