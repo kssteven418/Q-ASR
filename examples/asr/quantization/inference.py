@@ -67,18 +67,28 @@ def main():
     parser.add_argument("--wer_tolerance", type=float, default=1.0, help="used by test")
     parser.add_argument("--normalize_text", default=True, type=bool, help="Normalize transcripts or not. Set to False for non-English.")
     parser.add_argument("--store_model", type=str, default=None, help="path to store the model")
-    parser.add_argument("--cnt", type=int, default=None, help="early stop for debugging")
+    parser.add_argument("--eval_early_stop", type=int, default=None, help="early stop for debugging")
+    parser.add_argument("--calib_early_stop", type=int, default=None, help="early stop calibration")
 
     parser.add_argument("--dynamic", action='store_true', help="Dynamic quantization mode.")
-    parser.add_argument("--normalize", action='store_true', help="Normalize calib data.")
+    parser.add_argument("--no_quant", action='store_true', help="No quantization mode.")
+    parser.add_argument("--shuffle", action='store_true', help="Shuffle test data.")
+    parser.add_argument("--quant_bit", type=int, default=8, help="quantization bit, homogeneous")
+    parser.add_argument("--percentile", type=float, default=None, help="Max/min percentile for outlier handling. e.g., 99.9")
 
     parser.add_argument("--distill_num_batch", type=int, default=50, help="number of batches for distilled data")
-    parser.add_argument("--distill_train_iter", type=int, default=200, help="training iteration for distilled data generation")
+    parser.add_argument("--distill_train_iter", type=int, default=300, help="training iteration for distilled data generation")
     parser.add_argument("--distill_batch_size", type=int, default=8)
     parser.add_argument("--distill_dump", type=str, default=None, help="Pickle dump filename for distilled data")
     parser.add_argument("--distill_load", type=str, default=None, help="Pickle load path for distilled data")
+    parser.add_argument("--distill_lr", type=float, default=0.01, help="Learning rate of data distillation")
     parser.add_argument("--alpha", type=float, default=0.0, help="regularization constant for distillation") 
     parser.add_argument("--beta", type=float, default=0.0, help="regularization constant for distillation")
+    parser.add_argument("--loss_criterion", type=str, default=None, 
+            choices=['zeroq', 'zeroq-norm', 'kl', 'hd'], help="Loss criterion")
+
+    parser.add_argument("--distill_only", action='store_true', help="Skip calibration/evaluation after distillation.")
+    parser.add_argument("--calib_only", action='store_true', help="Skip evaluation after calibration.")
     args = parser.parse_args()
 
     torch.set_grad_enabled(False)
@@ -103,15 +113,16 @@ def main():
                 'labels': asr_model.decoder.vocabulary,
                 'batch_size': args.batch_size,
                 'normalize_transcripts': args.normalize_text,
+                'shuffle': args.shuffle,
             }
         )
 
-    if args.store_model is not None:
-        asr_model.save_to(args.store_model)
-        print('model stored at %s' % args.store_model)
-        sys.exit()
+    ############################## Distillation #####################################
 
+    file_name = '%s-%s-bs%d-iter%d-lr%.3f-a%.3f.pkl' % \
+            (args.distill_dump, args.loss_criterion, args.distill_num_batch, args.distill_train_iter, args.distill_lr, args.alpha)
 
+    # if dynamic, we can skip distillation
     if not args.dynamic:
         teacher_model.set_quant_mode('none') # distable quantization mode for the teacher model
         torch.set_grad_enabled(True) # enable backward graph generation
@@ -126,50 +137,65 @@ def main():
             print('distillating')
             distilled_data = get_distill_data(teacher_model.encoder, teacher_model.decoder, batch_size=args.distill_batch_size, 
                     dim=64, seqlen=distill_seqlen, num_batch=args.distill_num_batch, train_iter=args.distill_train_iter,
-                    alpha=args.alpha, beta=args.beta)
+                    alpha=args.alpha, beta=args.beta, loss_criterion=args.loss_criterion, lr=args.distill_lr)
             # if dump path is given, dump the distilled data
             if args.distill_dump is not None:
-                file_name = '%s-%d-%d-a%f.pkl' % (args.distill_dump, args.distill_num_batch, args.distill_train_iter, args.alpha)
-                print('model dumped as ', file_name)
+                print('Distilled data dumped as ', file_name)
                 with open(file_name, 'wb') as f:
-                    pickle.dump(distilled_data, f)
-                with open('cpu_'+file_name, 'wb') as f:
                     pickle.dump([x.cpu() for x in distilled_data], f)
+
+    if args.distill_only:
+        sys.exit()
+
+    if args.store_model is not None:
+        asr_model.save_to(args.store_model)
+        print('model stored at %s' % args.store_model)
+        sys.exit()
+
+    ############################## Calibration #####################################
 
     torch.set_grad_enabled(False) # disable backward graph generation
     asr_model.eval() # evaluation mode
-    asr_model.encoder.bn_folding() # BN folding
+    asr_model.set_quant_bit(args.quant_bit)
+
+    # set percentile
+    if args.percentile is not None:
+        qm.set_percentile(asr_model, args.percentile)
+
+    if args.no_quant:
+        asr_model.set_quant_mode('none')
+    else:
+        asr_model.encoder.bn_folding() # BN folding
 
     # if not dynamic quantization mode, calibrate min/max/range for the activations using the distilled data
+    # if dynamic, we can skip calibration
     if not args.dynamic:
         print('calibrating')
         qm.calibrate(asr_model)
         length = torch.tensor([distill_seqlen] * args.distill_batch_size).cuda()
         for batch_idx, inputs in enumerate(distilled_data):
+            if args.calib_early_stop is not None and  batch_idx == args.calib_early_stop:
+                break
             inputs = inputs.cuda()
-            if args.normalize:
-                m = inputs.mean(axis=-1, keepdim=True)
-                s = inputs.std(axis=-1, keepdim=True)
-                inputs = (inputs - m) / s
-                inputs = torch.clamp(inputs, min=-4, max=4)
             encoded, encoded_len, encoded_scaling_factor = asr_model.encoder(audio_signal=inputs, length=length)
             log_probs = asr_model.decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
 
+    if args.calib_only:
+        sys.exit()
+
     print('evaluating')
     qm.evaluate(asr_model)
-    qm.adjust_range(asr_model, 1.1) # adjust min/max to 1.1*min/1.1*max
+    #qm.adjust_range(asr_model, 1.1) # adjust min/max to 1.1*min/1.1*max
 
-    qm.set_dynamic(asr_model, args.dynamic) # if dynamic quantization mode, this will enabled
+    qm.set_dynamic(asr_model, args.dynamic) # if dynamic quantization mode, this will be enabled
     labels_map = dict([(i, asr_model.decoder.vocabulary[i]) for i in range(len(asr_model.decoder.vocabulary))])
     wer = WER(vocabulary=asr_model.decoder.vocabulary)
     hypotheses = []
     references = []
     progress_bar = tqdm(asr_model.test_dataloader())
-    cnt = 0
 
     for i, test_batch in enumerate(progress_bar):
-        cnt += 1
-        if cnt == args.cnt:
+        if i == args.eval_early_stop:
             break
 
         if can_gpu:
