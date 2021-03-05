@@ -73,7 +73,8 @@ def main():
     parser.add_argument("--dynamic", action='store_true', help="Dynamic quantization mode.")
     parser.add_argument("--no_quant", action='store_true', help="No quantization mode.")
     parser.add_argument("--shuffle", action='store_true', help="Shuffle test data.")
-    parser.add_argument("--quant_bit", type=int, default=8, help="quantization bit, homogeneous")
+    parser.add_argument("--weight_bit", type=int, default=8, help="quantization bit for weights")
+    parser.add_argument("--act_bit", type=int, default=8, help="quantization bit for activations")
     parser.add_argument("--percentile", type=float, default=None, help="Max/min percentile for outlier handling. e.g., 99.9")
 
     parser.add_argument("--distill_num_batch", type=int, default=50, help="number of batches for distilled data")
@@ -156,7 +157,8 @@ def main():
 
     torch.set_grad_enabled(False) # disable backward graph generation
     asr_model.eval() # evaluation mode
-    asr_model.set_quant_bit(args.quant_bit)
+    asr_model.set_quant_bit(args.weight_bit, mode='weight')
+    asr_model.set_quant_bit(args.act_bit, mode='act')
 
     # set percentile
     if args.percentile is not None:

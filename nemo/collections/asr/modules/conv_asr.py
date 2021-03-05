@@ -131,7 +131,6 @@ class ConvASREncoder(NeuralModule, Exportable):
 
         self._feat_in = feat_in
         self.quant_mode = quant_mode
-        self.quant_bit = quant_bit
         self.convs_before_bn = []
 
         residual_panes = []
@@ -214,10 +213,9 @@ class ConvASREncoder(NeuralModule, Exportable):
 
         return s_input_last, length, s_input_last_scaling_factor
 
-    def set_quant_bit(self, quant_bit):
-        self.quant_bit = quant_bit
+    def set_quant_bit(self, quant_bit, mode='all'):
         for l in self.encoder_layers:
-            l.set_quant_bit(self.quant_bit)
+            l.set_quant_bit(quant_bit, mode)
 
     def set_quant_mode(self, quant_mode):
         self.quant_mode = quant_mode
@@ -260,12 +258,11 @@ class ConvASRDecoder(NeuralModule, Exportable):
                 )
             self.__vocabulary = vocabulary
         self._feat_in = feat_in
-        self.quant_bit = quant_bit
         # Add 1 for blank char
         self._num_classes = num_classes + 1
-        self.act = QuantAct(self.quant_bit, quant_mode=self.quant_mode, per_channel=False)
+        self.act = QuantAct(quant_bit, quant_mode=self.quant_mode, per_channel=False)
         conv = torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
-        qconv = QuantConv1d(self.quant_bit, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
+        qconv = QuantConv1d(quant_bit, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
         qconv.set_param(conv)
 
         self.decoder_layers = torch.nn.Sequential(
@@ -303,11 +300,12 @@ class ConvASRDecoder(NeuralModule, Exportable):
             logging.warning(f"Turned off {m_count} masked convolutions")
         Exportable._prepare_for_export(self)
 
-    def set_quant_bit(self, quant_bit):
-        self.quant_bit = quant_bit
-        self.act.activation_bit = quant_bit
+    def set_quant_bit(self, quant_bit, mode='all'):
+        if mode in ['all', 'act']:
+            self.act.activation_bit = quant_bit
         for l in self.decoder_layers:
-            l.weight_bit = quant_bit
+            if mode in ['all', 'weight']:
+                l.weight_bit = quant_bit
 
     def set_quant_mode(self, quant_mode):
         self.quant_mode = quant_mode

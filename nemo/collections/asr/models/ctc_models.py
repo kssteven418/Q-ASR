@@ -139,9 +139,9 @@ class EncDecCTCModel(ASRModel, Exportable):
             log_prediction=self._cfg.get("log_prediction", False),
         )
 
-    def set_quant_bit(self, quant_bit):
-        self.encoder.set_quant_bit(quant_bit)
-        self.decoder.set_quant_bit(quant_bit)
+    def set_quant_bit(self, quant_bit, mode='all'):
+        self.encoder.set_quant_bit(quant_bit, mode)
+        self.decoder.set_quant_bit(quant_bit, mode)
 
     def set_quant_mode(self, quant_mode):
         self.encoder.set_quant_mode(quant_mode)

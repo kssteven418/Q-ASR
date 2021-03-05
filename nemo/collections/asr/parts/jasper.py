@@ -136,7 +136,6 @@ class MaskedConv1d(nn.Module):
     ):
         super(MaskedConv1d, self).__init__()
         self.quant_mode = quant_mode
-        self.quant_bit = quant_bit
         self.asymmetric = asymmetric
         self.name = name
 
@@ -160,12 +159,12 @@ class MaskedConv1d(nn.Module):
             bias=bias,
         )
 
-        self.act_quant_bit = self.quant_bit
+        act_quant_bit = quant_bit
         if self.asymmetric:
-            self.act_quant_bit += 1 # This has the same effect as using the asymmetric quantization w. bias 0
+            act_quant_bit += 1 # This has the same effect as using the asymmetric quantization w. bias 0
 
-        self.act = QuantAct(self.act_quant_bit, quant_mode=self.quant_mode, per_channel=False, name=name+'_act')
-        self.conv = QuantConv1d(self.quant_bit, bias_bit=32, quant_mode=self.quant_mode, 
+        self.act = QuantAct(act_quant_bit, quant_mode=self.quant_mode, per_channel=False, name=name+'_act')
+        self.conv = QuantConv1d(quant_bit, bias_bit=32, quant_mode=self.quant_mode, 
                 per_channel=True, name=name+'_conv')
         self.conv.set_param(conv)
 
@@ -180,14 +179,15 @@ class MaskedConv1d(nn.Module):
     def bn_folding(self, bn):
         self.conv.bn_folding(bn)
 
-    def set_quant_bit(self, quant_bit):
-        self.quant_bit = quant_bit
-        self.act_quant_bit = self.quant_bit
-        if self.asymmetric:
-            self.act_quant_bit += 1
+    def set_quant_bit(self, quant_bit, mode='all'):
+        if mode in ['all', 'act']:
+            act_quant_bit = quant_bit
+            if self.asymmetric:
+                act_quant_bit += 1
+            self.act.activation_bit = act_quant_bit
 
-        self.conv.weight_bit = quant_bit
-        self.act.activation_bit = self.act_quant_bit
+        if mode in ['all', 'weight']:
+            self.conv.weight_bit = quant_bit
 
     def set_quant_mode(self, quant_mode):
         self.quant_mode = quant_mode
@@ -344,7 +344,6 @@ class JasperBlock(nn.Module):
         self.residual_mode = residual_mode
         self.se = se
         self.quant_mode = quant_mode
-        self.quant_bit = quant_bit
         self.layer_num = layer_num
         self.name = 'jb%d' % self.layer_num
         self.cnt = 0
@@ -455,7 +454,7 @@ class JasperBlock(nn.Module):
         else:
             self.res = None
 
-        self.res_act =  QuantAct(self.quant_bit, quant_mode=self.quant_mode, per_channel=False, name=self.name+('_res_act'))
+        self.res_act =  QuantAct(quant_bit, quant_mode=self.quant_mode, per_channel=False, name=self.name+('_res_act'))
         self.mout = nn.Sequential(*self._get_act_dropout_layer(drop_prob=dropout, activation=activation))
 
 
@@ -484,17 +483,16 @@ class JasperBlock(nn.Module):
                 res.append(res_list)
             self.res = res
 
-    def set_quant_bit(self, quant_bit):
-        self.quant_bit = quant_bit
+    def set_quant_bit(self, quant_bit, mode='all'):
         if self.mconv is not None:
             for l in self.mconv:
                 if isinstance(l, MaskedConv1d):
-                    l.set_quant_bit(quant_bit)
+                    l.set_quant_bit(quant_bit, mode)
         if self.res is not None:
             for _l in self.res: # for all residual connections
                 for l in _l: # for all operations in a residual connection
                     if isinstance(l, MaskedConv1d):
-                        l.set_quant_bit(quant_bit)
+                        l.set_quant_bit(quant_bit, mode)
         self.res_act.activation_bit = quant_bit
 
     def set_quant_mode(self, quant_mode):

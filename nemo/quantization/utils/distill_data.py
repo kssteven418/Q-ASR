@@ -203,11 +203,21 @@ def get_distill_data(teacher_model,
                     total_loss += hd_loss(bn_mean, bn_std, conv_mean, conv_std)
 
                 output = conv_output[0]
-                total_max += output.max()
+                m = output.abs().max()
+                '''
+                with torch.no_grad():
+                    p = torch.quantile(output.abs(), 0.99995)
+                    panelty = m/p - 1
+                #print(panelty)
+                total_max += m * panelty
+                '''
+                total_max += m
+
                 cnt += 1
 
             total_max = total_max / cnt
             #print(total_loss, total_max)
+            #print(float(total_max), float(total_loss))
             total_loss += alpha * total_max
 
             '''
@@ -223,7 +233,7 @@ def get_distill_data(teacher_model,
 
             # Uncomment this for logging
             l2_norm = torch.sqrt(gd * gd).mean()
-            if it % 1 == 0:
+            if it % 1000 == 0:
                 print('min, max, l2-norm:', float(gd.min()), float(gd.max()), float(l2_norm))
                 print('total loss:', it, float(total_loss))
                 print()
