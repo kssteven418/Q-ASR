@@ -86,17 +86,15 @@ def main():
 
     teacher_model.set_quant_mode('none') # distable quantization mode for the teacher model
     torch.set_grad_enabled(True) # enable backward graph generation
-    distill_seqlen = args.seqlen
 
     print("Num batches: %d, Batch size: %d, Training iterations: %d, Learning rate: %.3f " \
             % (args.num_batch, args.batch_size, args.train_iter, args.lr))
     print('Synthesizing...')
 
-    distilled_data = get_distill_data(teacher_model.encoder, teacher_model.decoder, batch_size=args.batch_size, 
-            dim=64, seqlen=distill_seqlen, num_batch=args.num_batch, train_iter=args.train_iter,
-            alpha=args.alpha, beta=args.beta, loss_criterion='kl', lr=args.lr)
+    synthetic_data = get_synthetic_data(teacher_model.encoder, teacher_model.decoder, batch_size=args.batch_size, 
+            dim=64, seqlen=args.seqlen, num_batch=args.num_batch, train_iter=args.train_iter, lr=args.lr)
 
-    file_name = '%s_bs%d_iter%d_lr%.3f.pkl' % \
+    file_name = '%s_nb%d_iter%d_lr%.3f.pkl' % \
             (args.dump_prefix,  args.num_batch, args.train_iter, args.lr)
 
     if args.dump_path is not None:
@@ -106,7 +104,7 @@ def main():
 
     print('Synthetic data dumped as ', file_name)
     with open(file_name, 'wb') as f:
-        pickle.dump([x.cpu() for x in distilled_data], f)
+        pickle.dump([x.cpu() for x in synthetic_data], f)
 
 if __name__ == '__main__':
     main()  # noqa pylint: disable=no-value-for-parameter
