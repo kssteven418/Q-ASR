@@ -646,12 +646,8 @@ class JasperBlock(nn.Module):
         if len(input_) == 2:
             xs, lens_orig = input_
 
-        #if self.quant_mode == 'symmetric':
-        #    assert len(xs) == 1
-
         # compute forward convolutions
         out, out_scaling_factor = xs[-1]
-        #out_scaling_factor = input_scaling_factor
 
         lens = lens_orig
         for i, l in enumerate(self.mconv):
