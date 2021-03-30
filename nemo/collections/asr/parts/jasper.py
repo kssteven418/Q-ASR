@@ -670,35 +670,16 @@ class JasperBlock(nn.Module):
         #out_scaling_factor = input_scaling_factor
 
         lens = lens_orig
-        bn_file_path = None
-        #bn_file_path = '/rscratch/sehoonkim/workspace/squeezeasr/squeezeasr/bn_stats/bn/'
-        conv_file_path = None
-        #conv_file_path = '/rscratch/sehoonkim/workspace/squeezeasr/squeezeasr/bn_stats/%s/' % 'real_bs1'
-        prev_conv_name = ''
-        adj = False
         for i, l in enumerate(self.mconv):
             if isinstance(l, MaskedConv1d):
                 out, lens, out_scaling_factor = l(out, lens, out_scaling_factor)
-                prev_conv_name = l.name
-                # dump convolution outputs
-                if conv_file_path is not None:
-                    with open(conv_file_path + ('%d/' % self.cnt) + prev_conv_name + '.pkl', 'wb') as f:
-                        pickle.dump(out, f)
-                adj = True
             else:
                 if isinstance(l, nn.BatchNorm1d):
-                    assert adj
                     mean = l.running_mean
                     std = l.running_var ** 0.5
                     stats = [mean, std]
-                    # dump bn statistics
-                    if bn_file_path is not None:
-                        #print(prev_conv_name, float(mean[0]), float(std[0]))
-                        with open(bn_file_path + prev_conv_name + '.pkl', 'wb') as f:
-                            pickle.dump(stats, f)
 
                 out = l(out)
-                adj = False
 
         # compute the residuals
         if self.res is not None:
@@ -707,32 +688,17 @@ class JasperBlock(nn.Module):
                 assert self.residual_mode == 'add' or self.residual_mode == 'stride_add'
             for i, layer in enumerate(self.res):
                 res_out, res_out_scaling_factor = xs[i]
-                prev_conv_name = ''
-                adj = False
                 for j, res_layer in enumerate(layer):
                     #print('res', type(res_layer))
                     if isinstance(res_layer, MaskedConv1d):
                         res_out, _, res_out_scaling_factor = \
                                 res_layer(res_out, lens_orig, res_out_scaling_factor)
-                        prev_conv_name = res_layer.name
-                        # dump convolution outputs
-                        if conv_file_path is not None:
-                            with open(conv_file_path + ('%d/' % self.cnt) + prev_conv_name + '.pkl', 'wb') as f:
-                                pickle.dump(res_out, f)
-                        adj = True
                     else:
                         if isinstance(res_layer, nn.BatchNorm1d):
-                            assert adj
                             mean = res_layer.running_mean
                             std = res_layer.running_var ** 0.5
                             stats = [mean, std]
-                            # dump bn statistics
-                            if bn_file_path is not None:
-                                #print(prev_conv_name, float(mean[0]), float(std[0]))
-                                with open(bn_file_path + prev_conv_name + '.pkl', 'wb') as f:
-                                    pickle.dump(stats, f)
                         res_out = res_layer(res_out)
-                        adj = False
 
                 if self.residual_mode == 'add' or self.residual_mode == 'stride_add':
                     #out = out + res_out
