@@ -397,7 +397,7 @@ class ModelPT(LightningModule, Model):
                 OmegaConf.set_struct(conf, True)
                 instance = cls.from_config_dict(config=conf)
                 instance = instance.to(map_location)
-                instance.load_state_dict(torch.load(model_weights, map_location=map_location), strict=strict)
+                instance.load_state_dict(torch.load(model_weights, map_location=map_location), strict=False)
 
                 logging.info(f'Model {cls.__name__} was successfully restored from {restore_path}.')
             finally:

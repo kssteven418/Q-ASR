@@ -39,6 +39,7 @@ from nemo.core.neural_types import (
     SpectrogramType,
 )
 from nemo.utils import logging
+from nemo.quantization.utils.quant_modules import *
 
 __all__ = ['ConvASRDecoder', 'ConvASREncoder', 'ConvASRDecoderClassification']
 
@@ -118,6 +119,8 @@ class ConvASREncoder(NeuralModule, Exportable):
         conv_mask: bool = True,
         frame_splicing: int = 1,
         init_mode: Optional[str] = 'xavier_uniform',
+        quant_mode: Optional[str] = 'none',
+        quant_bit: Optional[int] = 8,
     ):
         super().__init__()
         if isinstance(jasper, ListConfig):
@@ -127,11 +130,13 @@ class ConvASREncoder(NeuralModule, Exportable):
         feat_in = feat_in * frame_splicing
 
         self._feat_in = feat_in
+        self.quant_mode = quant_mode
+        self.convs_before_bn = []
 
         residual_panes = []
         encoder_layers = []
         self.dense_residual = False
-        for lcfg in jasper:
+        for i, lcfg in enumerate(jasper):
             dense_res = []
             if lcfg.get('residual_dense', False):
                 residual_panes.append(feat_in)
@@ -147,7 +152,7 @@ class ConvASREncoder(NeuralModule, Exportable):
             se_interpolation_mode = lcfg.get('se_interpolation_mode', 'nearest')
             kernel_size_factor = lcfg.get('kernel_size_factor', 1.0)
             stride_last = lcfg.get('stride_last', False)
-            encoder_layers.append(
+            jasper_block =  \
                 JasperBlock(
                     feat_in,
                     lcfg['filters'],
@@ -172,22 +177,47 @@ class ConvASREncoder(NeuralModule, Exportable):
                     se_interpolation_mode=se_interpolation_mode,
                     kernel_size_factor=kernel_size_factor,
                     stride_last=stride_last,
+                    quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    layer_num=i,
                 )
-            )
+            encoder_layers.append(jasper_block)
+            self.convs_before_bn += jasper_block.convs_before_bn
             feat_in = lcfg['filters']
 
         self._feat_out = feat_in
 
+        self.encoder_layers = encoder_layers
         self.encoder = torch.nn.Sequential(*encoder_layers)
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
-    @typecheck()
-    def forward(self, audio_signal, length=None):
-        s_input, length = self.encoder(([audio_signal], length))
-        if length is None:
-            return s_input[-1]
+    def forward(self, audio_signal, length=None, audio_signal_scaling_factor=None):
+        s_input, length = [(audio_signal, audio_signal_scaling_factor)], length
+        for i, layer in enumerate(self.encoder_layers):
+            s_input, length = \
+                    layer((s_input, length))
 
-        return s_input[-1], length
+        s_input_last, s_input_last_scaling_factor = s_input[-1]
+
+        if length is None:
+            assert self.quant_mode != 'symmetric'
+            return s_input_last
+
+        return s_input_last, length, s_input_last_scaling_factor
+
+    def bn_folding(self):
+        for l in self.encoder_layers:
+            l.bn_folding()
+
+    def set_quant_bit(self, quant_bit, mode='all'):
+        assert mode in ['all', 'weight', 'act']
+        for l in self.encoder_layers:
+            l.set_quant_bit(quant_bit, mode)
+
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        for l in self.encoder_layers:
+            l.set_quant_mode(self.quant_mode)
 
 
 class ConvASRDecoder(NeuralModule, Exportable):
@@ -214,8 +244,9 @@ class ConvASRDecoder(NeuralModule, Exportable):
     def output_types(self):
         return OrderedDict({"logprobs": NeuralType(('B', 'T', 'D'), LogprobsType())})
 
-    def __init__(self, feat_in, num_classes, init_mode="xavier_uniform", vocabulary=None):
+    def __init__(self, feat_in, num_classes, init_mode="xavier_uniform", vocabulary=None, quant_mode='none', quant_bit=8):
         super().__init__()
+        self.quant_mode = quant_mode
 
         if vocabulary is not None:
             if num_classes != len(vocabulary):
@@ -226,15 +257,22 @@ class ConvASRDecoder(NeuralModule, Exportable):
         self._feat_in = feat_in
         # Add 1 for blank char
         self._num_classes = num_classes + 1
+        self.act = QuantAct(quant_bit, quant_mode=self.quant_mode, per_channel=False)
+        conv = torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
+        qconv = QuantConv1d(quant_bit, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
+        qconv.set_param(conv)
 
         self.decoder_layers = torch.nn.Sequential(
-            torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
+            qconv
         )
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
-    @typecheck()
-    def forward(self, encoder_output):
-        return torch.nn.functional.log_softmax(self.decoder_layers(encoder_output).transpose(1, 2), dim=-1)
+    def forward(self, encoder_output, encoder_output_scaling_factor=None):
+        output, output_scaling_factor = self.act(encoder_output, encoder_output_scaling_factor)
+        
+        for l in self.decoder_layers:
+            output, _ = l(output, output_scaling_factor)
+        return torch.nn.functional.log_softmax(output.transpose(1, 2), dim=-1)
 
     def input_example(self):
         """
@@ -256,6 +294,21 @@ class ConvASRDecoder(NeuralModule, Exportable):
         if m_count > 0:
             logging.warning(f"Turned off {m_count} masked convolutions")
         Exportable._prepare_for_export(self)
+
+    def set_quant_bit(self, quant_bit, mode='all'):
+        assert mode in ['all', 'weight', 'act']
+        if mode in ['all', 'act']:
+            self.act.activation_bit = quant_bit
+        for l in self.decoder_layers:
+            if mode in ['all', 'weight']:
+                l.weight_bit = quant_bit
+
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        self.act.quant_mode = quant_mode
+        for l in self.decoder_layers:
+            l.quant_mode = quant_mode
+
 
     @property
     def vocabulary(self):

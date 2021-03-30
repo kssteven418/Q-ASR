@@ -20,6 +20,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from nemo.collections.asr.parts.activations import Swish
+from nemo.quantization.utils.quant_modules import * 
 
 jasper_activations = {"hardtanh": nn.Hardtanh, "relu": nn.ReLU, "selu": nn.SELU, "swish": Swish}
 
@@ -127,8 +128,13 @@ class MaskedConv1d(nn.Module):
         heads=-1,
         bias=False,
         use_mask=True,
+        quant_mode='none',
+        quant_bit=8,
+        asymmetric=False,
     ):
         super(MaskedConv1d, self).__init__()
+        self.quant_mode = quant_mode
+        self.asymmetric = asymmetric
 
         if not (heads == -1 or groups == in_channels):
             raise ValueError("Only use heads for depthwise convolutions")
@@ -139,7 +145,7 @@ class MaskedConv1d(nn.Module):
             out_channels = heads
             groups = heads
 
-        self.conv = nn.Conv1d(
+        conv = nn.Conv1d(
             in_channels,
             out_channels,
             kernel_size,
@@ -149,6 +155,15 @@ class MaskedConv1d(nn.Module):
             groups=groups,
             bias=bias,
         )
+
+        act_quant_bit = quant_bit
+        if self.asymmetric:
+            act_quant_bit += 1 # This has the same effect as using the asymmetric quantization w. bias 0
+
+        self.act = QuantAct(act_quant_bit, quant_mode=self.quant_mode, per_channel=False)
+        self.conv = QuantConv1d(quant_bit, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
+        self.conv.set_param(conv)
+
         self.use_mask = use_mask
         self.heads = heads
 
@@ -157,7 +172,8 @@ class MaskedConv1d(nn.Module):
             lens + 2 * self.conv.padding[0] - self.conv.dilation[0] * (self.conv.kernel_size[0] - 1) - 1
         ) // self.conv.stride[0] + 1
 
-    def forward(self, x, lens):
+    def forward(self, x, lens, scaling_factor=None):
+        assert not(float(x.min()) < -1e-5 and self.asymmetric)
         if self.use_mask:
             lens = lens.to(dtype=torch.long)
             max_len = x.size(2)
@@ -165,17 +181,35 @@ class MaskedConv1d(nn.Module):
             x = x.masked_fill(mask.unsqueeze(1).to(device=x.device), 0)
             # del mask
             lens = self.get_seq_len(lens)
-
         sh = x.shape
         if self.heads != -1:
             x = x.view(-1, self.heads, sh[-1])
 
-        out = self.conv(x)
+        x, x_scaling_factor = self.act(x, scaling_factor)
+        out, out_scaling_factor = self.conv(x, x_scaling_factor)
 
         if self.heads != -1:
             out = out.view(sh[0], self.real_out_channels, -1)
 
-        return out, lens
+        return out, lens, out_scaling_factor
+
+    def bn_folding(self, bn):
+        self.conv.bn_folding(bn)
+
+    def set_quant_bit(self, quant_bit, mode='all'):
+        if mode in ['all', 'act']:
+            act_quant_bit = quant_bit
+            if self.asymmetric:
+                act_quant_bit += 1 # unsigned integer
+            self.act.activation_bit = act_quant_bit
+
+        if mode in ['all', 'weight']:
+            self.conv.weight_bit = quant_bit
+
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        self.conv.quant_mode = quant_mode
+        self.act.quant_mode = quant_mode
 
 
 class GroupShuffle(nn.Module):
@@ -285,6 +319,9 @@ class JasperBlock(nn.Module):
         se_context_window=None,
         se_interpolation_mode='nearest',
         stride_last=False,
+        quant_mode='none', 
+        quant_bit=8, 
+        layer_num=-1,
     ):
         super(JasperBlock, self).__init__()
 
@@ -302,11 +339,14 @@ class JasperBlock(nn.Module):
         self.separable = separable
         self.residual_mode = residual_mode
         self.se = se
+        self.quant_mode = quant_mode
+        self.layer_num = layer_num
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
+        self.convs_before_bn = []
 
-        for _ in range(repeat - 1):
+        for i in range(repeat - 1):
             # Stride last means only the last convolution in block will have stride
             if stride_last:
                 stride_val = [1]
@@ -326,6 +366,9 @@ class JasperBlock(nn.Module):
                     separable=separable,
                     normalization=normalization,
                     norm_groups=norm_groups,
+                    quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    is_first_layer=(self.layer_num==0 and i==0), # 1st conv of the 1st layer
                 )
             )
 
@@ -346,10 +389,14 @@ class JasperBlock(nn.Module):
                 separable=separable,
                 normalization=normalization,
                 norm_groups=norm_groups,
+                quant_mode=quant_mode,
+                quant_bit=quant_bit,
+                is_first_layer=(self.layer_num==0 and repeat==1),
             )
         )
 
         if se:
+            assert quant_mode == 'none', 'SqueezeExcite does not currently support quantization'
             conv.append(
                 SqueezeExcite(
                     planes,
@@ -376,7 +423,7 @@ class JasperBlock(nn.Module):
             if len(residual_panes) == 0:
                 res_panes = [inplanes]
                 self.dense_residual = False
-            for ip in res_panes:
+            for i, ip in enumerate(res_panes):
                 res = nn.ModuleList(
                     self._get_conv_bn_layer(
                         ip,
@@ -385,6 +432,9 @@ class JasperBlock(nn.Module):
                         normalization=normalization,
                         norm_groups=norm_groups,
                         stride=stride_val,
+                        quant_mode=quant_mode,
+                        quant_bit=quant_bit,
+                        is_first_layer=(self.layer_num==0),
                     )
                 )
 
@@ -394,7 +444,59 @@ class JasperBlock(nn.Module):
         else:
             self.res = None
 
+        self.res_act =  QuantAct(quant_bit, quant_mode=self.quant_mode, per_channel=False)
         self.mout = nn.Sequential(*self._get_act_dropout_layer(drop_prob=dropout, activation=activation))
+
+
+    def bn_folding(self):
+        def _folding(layers, l):
+            if isinstance(l, nn.BatchNorm1d):
+                assert isinstance(layers[-1], MaskedConv1d)
+                layers[-1].bn_folding(l)
+            else:
+                layers.append(l)
+
+        conv = nn.ModuleList()
+
+        if self.mconv is not None:
+            for l in self.mconv:
+                _folding(conv, l)
+
+        self.mconv = conv
+
+        if self.res is not None:
+            res = nn.ModuleList()
+            for _l in self.res: # for all residual connections
+                res_list = nn.ModuleList()
+                for l in _l:
+                    _folding(res_list, l)
+                res.append(res_list)
+            self.res = res
+
+    def set_quant_bit(self, quant_bit, mode='all'):
+        if self.mconv is not None:
+            for l in self.mconv:
+                if isinstance(l, MaskedConv1d):
+                    l.set_quant_bit(quant_bit, mode)
+        if self.res is not None:
+            for _l in self.res: # for all residual connections
+                for l in _l: # for all operations in a residual connection
+                    if isinstance(l, MaskedConv1d):
+                        l.set_quant_bit(quant_bit, mode)
+        self.res_act.activation_bit = quant_bit
+
+    def set_quant_mode(self, quant_mode):
+        self.quant_mode = quant_mode
+        if self.mconv is not None:
+            for l in self.mconv:
+                if isinstance(l, MaskedConv1d):
+                    l.set_quant_mode(quant_mode)
+        if self.res is not None:
+            for _l in self.res: # for all residual connections
+                for l in _l: # for all operations in a residual connection
+                    if isinstance(l, MaskedConv1d):
+                        l.set_quant_mode(quant_mode)
+        self.res_act.quant_mode = quant_mode
 
     def _get_conv(
         self,
@@ -408,6 +510,9 @@ class JasperBlock(nn.Module):
         groups=1,
         heads=-1,
         separable=False,
+        quant_mode='none',
+        quant_bit=8,
+        asymmetric=False,
     ):
         use_mask = self.conv_mask
         if use_mask:
@@ -422,8 +527,13 @@ class JasperBlock(nn.Module):
                 groups=groups,
                 heads=heads,
                 use_mask=use_mask,
+                quant_mode=quant_mode,
+                quant_bit=quant_bit,
+                asymmetric=asymmetric,
             )
         else:
+            assert quant_mode == 'none', \
+                    'Quantization mode only supports convolution with mask currently.'
             return nn.Conv1d(
                 in_channels,
                 out_channels,
@@ -449,6 +559,9 @@ class JasperBlock(nn.Module):
         separable=False,
         normalization="batch",
         norm_groups=1,
+        quant_mode='none',
+        quant_bit=8,
+        is_first_layer=False,
     ):
         if norm_groups == -1:
             norm_groups = out_channels
@@ -465,6 +578,9 @@ class JasperBlock(nn.Module):
                     bias=bias,
                     groups=in_channels,
                     heads=heads,
+                    quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    asymmetric=(not is_first_layer),
                 ),
                 self._get_conv(
                     in_channels,
@@ -475,6 +591,9 @@ class JasperBlock(nn.Module):
                     padding=0,
                     bias=bias,
                     groups=groups,
+                    quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    asymmetric=False,
                 ),
             ]
         else:
@@ -488,8 +607,12 @@ class JasperBlock(nn.Module):
                     padding=padding,
                     bias=bias,
                     groups=groups,
+                    quant_mode=quant_mode,
+                    quant_bit=quant_bit,
+                    asymmetric=(not is_first_layer),
                 )
             ]
+
 
         if normalization == "group":
             layers.append(nn.GroupNorm(num_groups=norm_groups, num_channels=out_channels))
@@ -504,6 +627,7 @@ class JasperBlock(nn.Module):
                 f"Normalization method ({normalization}) does not match" f" one of [batch, layer, group, instance]."
             )
 
+        self.convs_before_bn.append((layers[-2], layers[-1]))
         if groups > 1:
             layers.append(GroupShuffle(groups, out_channels))
         return layers
@@ -514,7 +638,8 @@ class JasperBlock(nn.Module):
         layers = [activation, nn.Dropout(p=drop_prob)]
         return layers
 
-    def forward(self, input_: Tuple[List[Tensor], Optional[Tensor]]):
+    def forward(self, input_: Tuple[List[Tuple[Tensor, Optional[Tensor]]], Optional[Tensor]]):
+        # input: ([(input0, sf0), ..., (inputN, sfN)], length)
         # type: (Tuple[List[Tensor], Optional[Tensor]]) -> Tuple[List[Tensor], Optional[Tensor]] # nopep8
         lens_orig = None
         xs = input_[0]
@@ -522,36 +647,46 @@ class JasperBlock(nn.Module):
             xs, lens_orig = input_
 
         # compute forward convolutions
-        out = xs[-1]
+        out, out_scaling_factor = xs[-1]
 
         lens = lens_orig
         for i, l in enumerate(self.mconv):
-            # if we're doing masked convolutions, we need to pass in and
-            # possibly update the sequence lengths
-            # if (i % 4) == 0 and self.conv_mask:
             if isinstance(l, MaskedConv1d):
-                out, lens = l(out, lens)
+                out, lens, out_scaling_factor = l(out, lens, out_scaling_factor)
             else:
+                if isinstance(l, nn.BatchNorm1d):
+                    mean = l.running_mean
+                    std = l.running_var ** 0.5
+                    stats = [mean, std]
                 out = l(out)
 
         # compute the residuals
         if self.res is not None:
+            if self.quant_mode == 'symmetric':
+                assert self.residual_mode == 'add' or self.residual_mode == 'stride_add'
             for i, layer in enumerate(self.res):
-                res_out = xs[i]
+                res_out, res_out_scaling_factor = xs[i]
                 for j, res_layer in enumerate(layer):
                     if isinstance(res_layer, MaskedConv1d):
-                        res_out, _ = res_layer(res_out, lens_orig)
+                        res_out, _, res_out_scaling_factor = \
+                                res_layer(res_out, lens_orig, res_out_scaling_factor)
                     else:
+                        if isinstance(res_layer, nn.BatchNorm1d):
+                            mean = res_layer.running_mean
+                            std = res_layer.running_var ** 0.5
+                            stats = [mean, std]
                         res_out = res_layer(res_out)
 
                 if self.residual_mode == 'add' or self.residual_mode == 'stride_add':
-                    out = out + res_out
+                    out, out_scaling_factor = self.res_act(out, out_scaling_factor,
+                            res_out, res_out_scaling_factor)
                 else:
                     out = torch.max(out, res_out)
 
         # compute the output
         out = self.mout(out)
-        if self.res is not None and self.dense_residual:
-            return xs + [out], lens
 
-        return [out], lens
+        if self.res is not None and self.dense_residual:
+            return xs + [(out, out_scaling_factor)], lens
+
+        return [(out, out_scaling_factor)], lens

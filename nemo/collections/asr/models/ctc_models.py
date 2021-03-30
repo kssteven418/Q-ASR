@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Union
 
 import onnx
 import torch
+import omegaconf
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pytorch_lightning import Trainer
 
@@ -34,6 +35,7 @@ from nemo.core.classes.exportable import Exportable
 from nemo.core.neural_types import AudioSignal, LabelsType, LengthsType, LogprobsType, NeuralType, SpectrogramType
 from nemo.utils import logging
 from nemo.utils.export_utils import attach_onnx_to_onnx
+import nemo.quantization.utils.quantize_model as quantize_model
 
 __all__ = ['EncDecCTCModel', 'JasperNet', 'QuartzNet']
 
@@ -98,6 +100,11 @@ class EncDecCTCModel(ASRModel, Exportable):
 
         super().__init__(cfg=cfg, trainer=trainer)
         self.preprocessor = EncDecCTCModel.from_config_dict(self._cfg.preprocessor)
+        self.quant_mode = 'symmetric'
+        with omegaconf.open_dict(self._cfg.encoder):
+            self._cfg.encoder.quant_mode = 'symmetric'
+        with omegaconf.open_dict(self._cfg.decoder):
+            self._cfg.decoder.quant_mode = 'symmetric'
         self.encoder = EncDecCTCModel.from_config_dict(self._cfg.encoder)
 
         with open_dict(self._cfg):
@@ -130,6 +137,15 @@ class EncDecCTCModel(ASRModel, Exportable):
             dist_sync_on_step=True,
             log_prediction=self._cfg.get("log_prediction", False),
         )
+
+    def set_quant_bit(self, quant_bit, mode='all'):
+        self.encoder.set_quant_bit(quant_bit, mode)
+        self.decoder.set_quant_bit(quant_bit, mode)
+
+    def set_quant_mode(self, quant_mode):
+        self.encoder.set_quant_mode(quant_mode)
+        self.decoder.set_quant_mode(quant_mode)
+
 
     @torch.no_grad()
     def transcribe(self, paths2audio_files: List[str], batch_size: int = 4, logprobs=False) -> List[str]:
@@ -384,8 +400,8 @@ class EncDecCTCModel(ASRModel, Exportable):
         if self.spec_augmentation is not None and self.training:
             processed_signal = self.spec_augmentation(input_spec=processed_signal)
 
-        encoded, encoded_len = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
-        log_probs = self.decoder(encoder_output=encoded)
+        encoded, encoded_len, encoded_scaling_factor = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
+        log_probs = self.decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
         greedy_predictions = log_probs.argmax(dim=-1, keepdim=False)
         return log_probs, encoded_len, greedy_predictions
 
@@ -420,6 +436,7 @@ class EncDecCTCModel(ASRModel, Exportable):
         return {'loss': loss_value, 'log': tensorboard_logs}
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
+        quantize_model.evaluate(self)
         signal, signal_len, transcript, transcript_len = batch
         if isinstance(batch, DALIOutputs) and batch.has_processed_signal:
             log_probs, encoded_len, predictions = self.forward(
@@ -433,6 +450,8 @@ class EncDecCTCModel(ASRModel, Exportable):
         )
         self._wer.update(predictions=predictions, targets=transcript, target_lengths=transcript_len)
         wer, wer_num, wer_denom = self._wer.compute()
+        quantize_model.train(self)
+
         return {
             'val_loss': loss_value,
             'val_wer_num': wer_num,
