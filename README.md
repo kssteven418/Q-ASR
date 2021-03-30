@@ -80,7 +80,8 @@ python inference.py --asr_model {model_name} --dataset {path_to_manifest} \
 For instance,
 ```
 python inference.py --asr_model QuartzNet15x5Base-En --dataset {DIR}/dev_clean.json \
-                    --load dump/quartznet_nb20_iter200_lr0.050.pkl --weight_bit 6 --act_bit 6  --percentile 99.996
+                    --load dump/quartznet_nb20_iter200_lr0.050.pkl \
+                    --weight_bit 6 --act_bit 6  --percentile 99.996
 ```
 Similarly, `{DIR}/dev_clean.json` is the manifest file (generated from the preprocessing step) for the target evaluation dataset.
 Please use the flag `-h` to see the details for the input arguments.
