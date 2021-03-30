@@ -18,22 +18,6 @@ def set_percentile(model, percentile: float):
             if isinstance(mod, nn.Module):
                 set_percentile(mod, percentile)
 
-def adjust_range(model, scale: float):
-    if type(model) in list_all:
-        if type(model) == QuantAct:
-            model.adjust_range(scale)
-    elif type(model) == nn.Sequential:
-        for n, m in model.named_children():
-            adjust_range(m, scale)
-    elif type(model) == nn.ModuleList:
-        for n in model:
-            adjust_range(n, scale)
-    else:
-        for attr in dir(model):
-            mod = getattr(model, attr)
-            if isinstance(mod, nn.Module):
-                adjust_range(mod, scale)
-
 def set_dynamic(model, update: bool):
     if type(model) in list_all:
         if type(model) == QuantAct:

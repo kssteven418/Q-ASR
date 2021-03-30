@@ -13,23 +13,7 @@
 # limitations under the License.
 
 """
-From NeMo/examples/asr/speech_to_text_infer.py
-Usage: 
-    python inference.py \
-    --asr_model /rscratch/data/librispeech/nemo_models/QuartzNet15x5Base-En.nemo  \
-    --dataset /rscratch/data/librispeech/dev_other.json  
-
-You can also specify `--distill_dump [filename]` to store the distilled data
-Then, you can load the distilled data by `--distill_load [path]` to avoid distillation stage for the next runs
-
-By default, distillation is enabled and is executed with:
-    * training iteration = 300
-    * batch size = 8
-    * number of batches = 50 (thereby 8 * 50 = 400 data in total)
-You can change this dafault setting by specifying e.g., `--distill_train_iter 100  --batch_size 4 --distill_num_batch 10`
-
-Finally, you can enable dynamic quantization mode by specifying `--dynamic`
-This will skip distillation and calibration stages as they are unnecessary
+Code referred from NeMo/examples/asr/speech_to_text_infer.py
 """
 
 from argparse import ArgumentParser
@@ -61,24 +45,28 @@ can_gpu = torch.cuda.is_available()
 
 def main():
     parser = ArgumentParser()
+
+    """Training arguments"""
     parser.add_argument("--asr_model", type=str, default="QuartzNet15x5Base-En", required=True, help="Pass: 'QuartzNet15x5Base-En'")
     parser.add_argument("--dataset", type=str, required=True, help="path to evaluation data")
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--wer_tolerance", type=float, default=1.0, help="used by test")
     parser.add_argument("--normalize_text", default=True, type=bool, help="Normalize transcripts or not. Set to False for non-English.")
+    parser.add_argument("--shuffle", action='store_true', help="Shuffle test data.")
+
+    """Calibration arguments"""
+    parser.add_argument("--load", type=str, default=None, help="load path for the synthetic data")
+    parser.add_argument("--percentile", type=float, default=None, help="Max/min percentile for outlier handling. e.g., 99.9")
+
+    """Quantization arguments"""
+    parser.add_argument("--weight_bit", type=int, default=8, help="quantization bit for weights")
+    parser.add_argument("--act_bit", type=int, default=8, help="quantization bit for activations")
+    parser.add_argument("--dynamic", action='store_true', help="Dynamic quantization mode.")
+    parser.add_argument("--no_quant", action='store_true', help="No quantization mode.")
+
+    """Debugging arguments"""
     parser.add_argument("--eval_early_stop", type=int, default=None, help="early stop for debugging")
     parser.add_argument("--calib_early_stop", type=int, default=None, help="early stop calibration")
 
-    parser.add_argument("--dynamic", action='store_true', help="Dynamic quantization mode.")
-    parser.add_argument("--no_quant", action='store_true', help="No quantization mode.")
-    parser.add_argument("--shuffle", action='store_true', help="Shuffle test data.")
-    parser.add_argument("--weight_bit", type=int, default=8, help="quantization bit for weights")
-    parser.add_argument("--act_bit", type=int, default=8, help="quantization bit for activations")
-    parser.add_argument("--percentile", type=float, default=None, help="Max/min percentile for outlier handling. e.g., 99.9")
-
-    parser.add_argument("--distill_load", type=str, default=None, help="Pickle load path for distilled data")
-
-    parser.add_argument("--calib_only", action='store_true', help="Skip evaluation after calibration.")
     args = parser.parse_args()
 
     torch.set_grad_enabled(False)
@@ -102,15 +90,15 @@ def main():
         }
     )
 
-    if args.distill_load is not None:
-        print('data loaded from %s' % args.distill_load)
-        with open(args.distill_load, 'rb') as f:
+    if args.load is not None:
+        print('Data loaded from %s' % args.load)
+        with open(args.load, 'rb') as f:
             distilled_data = pickle.load(f)
+        synthetic_batch_size, _, synthetic_seqlen = distilled_data[0].shape
     else:
         assert args.dynamic, \
                 "synthetic data must be loaded unless running with the dynamic quantization mode"
 
-    synthetic_batch_size, _, synthetic_seqlen = distilled_data[0].shape
     
     ############################## Calibration #####################################
 
@@ -128,27 +116,26 @@ def main():
     else:
         asr_model.encoder.bn_folding() # BN folding
 
-    # if not dynamic quantization mode, calibrate min/max/range for the activations using the distilled data
+    # if not dynamic quantization, calibrate min/max/range for the activations using synthetic data
     # if dynamic, we can skip calibration
     if not args.dynamic:
-        print('calibrating')
+        print('Calibrating...')
         qm.calibrate(asr_model)
         length = torch.tensor([synthetic_seqlen] * synthetic_batch_size).cuda()
         for batch_idx, inputs in enumerate(distilled_data):
-            if args.calib_early_stop is not None and  batch_idx == args.calib_early_stop:
+            if args.calib_early_stop is not None and batch_idx == args.calib_early_stop:
                 break
             inputs = inputs.cuda()
             encoded, encoded_len, encoded_scaling_factor = asr_model.encoder(audio_signal=inputs, length=length)
             log_probs = asr_model.decoder(encoder_output=encoded, encoder_output_scaling_factor=encoded_scaling_factor)
 
-    if args.calib_only:
-        sys.exit()
 
-    print('evaluating')
+    ############################## Evaluation  #####################################
+
+    print('Evaluating...')
     qm.evaluate(asr_model)
-    #qm.adjust_range(asr_model, 1.1) # adjust min/max to 1.1*min/1.1*max
 
-    qm.set_dynamic(asr_model, args.dynamic) # if dynamic quantization mode, this will be enabled
+    qm.set_dynamic(asr_model, args.dynamic) # if dynamic quantization, this will be enabled
     labels_map = dict([(i, asr_model.decoder.vocabulary[i]) for i in range(len(asr_model.decoder.vocabulary))])
     wer = WER(vocabulary=asr_model.decoder.vocabulary)
     hypotheses = []
@@ -171,11 +158,7 @@ def main():
             references.append(reference)
         del test_batch
     wer_value = word_error_rate(hypotheses=hypotheses, references=references)
-    if wer_value > args.wer_tolerance:
-        raise valueerror(f"got wer of {wer_value}. it was higher than {args.wer_tolerance}")
-    logging.info(f'got wer of {wer_value}. tolerance was {args.wer_tolerance}')
-    print('value:', wer_value)
-
+    print('WER:', wer_value)
 
 if __name__ == '__main__':
     main()  # noqa pylint: disable=no-value-for-parameter
