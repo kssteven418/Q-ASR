@@ -66,7 +66,7 @@ def main():
         teacher_model = EncDecCTCModel.restore_from(restore_path=args.asr_model)
     else:
         logging.info(f"Using NGC cloud ASR model {args.asr_model}")
-        teacher_model = EncDecCTCModel.restore_from(restore_path=args.asr_model)
+        teacher_model = EncDecCTCModel.from_pretrained(model_name=args.asr_model)
 
     teacher_model.setup_test_data(
         test_data_config={
