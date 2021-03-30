@@ -33,6 +33,10 @@ class QuantAct(Module):
         Specify the channel length when using the per_channel mode.
     quant_mode : 'none' or 'symmetric', default 'none'
         The mode for quantization. 'none' for no quantization.
+    dynamic: bool, default False
+        The mode for dynamic quantization. True for dynamic quantization.
+    percentile: float, default None
+        Calibration percentile. None for min/max calibration
     """
     def __init__(self,
                  activation_bit,
@@ -92,10 +96,6 @@ class QuantAct(Module):
         """
         self.running_stat = True
 
-    def adjust_range(self, scale):
-        self.x_min *= scale
-        self.x_max *= scale
-
     def set_percentile(self, percentile):
         assert not self.per_channel, 'percentile mode is only available for the global quantization mode'
         self.percentile = percentile
@@ -103,12 +103,12 @@ class QuantAct(Module):
     def forward(self, x, 
                 pre_act_scaling_factor=None, 
                 identity=None, 
-                identity_scaling_factor=None,
-                specified_min=None,
-                specified_max=None):
-        # collect runnng stats
-        quantile_min, quantile_max = None, None # avoid double computation
+                identity_scaling_factor=None):
+
         x_act = x if identity is None else identity + x
+        quantile_min, quantile_max = None, None # avoid double computation
+
+        # collect runnng stats
         if self.running_stat:
             if self.percentile is None:
                 if not self.per_channel:
@@ -166,12 +166,11 @@ class QuantAct(Module):
                 else:
                     x_max = quantile_max
         else:
-            x_min = self.x_min if specified_min is None else specified_min
-            x_max = self.x_max if specified_max is None else specified_max
+            x_min = self.x_min
+            x_max = self.x_max
 
         x_min = x_min.view(1, -1, 1)
         x_max = x_max.view(1, -1, 1)
-
 
         act_scaling_factor = symmetric_linear_quantization_params(
             self.activation_bit, x_min, x_max, 
@@ -179,12 +178,8 @@ class QuantAct(Module):
         self.act_scaling_factor = act_scaling_factor.reshape(-1)
 
         if pre_act_scaling_factor is None:
-            # this is for the input quantization 
-            quant_act_int = self.act_function(x, self.activation_bit, \
-                    self.percentile, act_scaling_factor)
+            quant_act_int = self.act_function(x, self.activation_bit, act_scaling_factor)
 
-            # This is just a temporal solution
-            # Normally, if pre_act_scaling_factor is None, then identity is None as well
             x = quant_act_int * act_scaling_factor
             pre_act_scaling_factor = act_scaling_factor
 
@@ -200,27 +195,36 @@ class QuantAct(Module):
 
 
 class QuantConv1d(Module):
+    """
+    Class to quantize weights of given Conv1d layer
+    
+    Parameters:
+    ----------
+    weight_bit : int
+        Bitwidth for quantized weights.
+    bias_bit : int, default None
+        Bitwidth for quantized bias.
+    quant_mode : 'none' or 'symmetric', default 'none'
+        The mode for quantization. 'none' for no quantization.
+    per_channel : bool, default False
+        Whether to use channel-wise quantization.
+    fix_bn : bool, default True
+        Fix BN and do not update running mean/var if True
+    """
     def __init__(self,
                  weight_bit,
                  bias_bit=None,
                  quant_mode='none',
                  per_channel=False,
-                 fix_flag=False,
                  fix_bn = True,
-                 weight_percentile=0,
                 ):
         super(QuantConv1d, self).__init__()
         self.weight_bit = weight_bit
         self.per_channel = per_channel
-        self.fix_flag = fix_flag
-        self.weight_percentile = weight_percentile
         self.bias_bit = bias_bit
         self.quantize_bias = False if bias_bit is None else True
         self.quant_mode = quant_mode
-        self.counter = 1
-        self.percentile_mode = False
         self.fix_bn = fix_bn
-        self.update_bn = True
 
         if self.quant_mode == "symmetric":
             self.weight_function = SymmetricQuantFunction.apply
@@ -284,14 +288,13 @@ class QuantConv1d(Module):
         self.conv_scaling_factor = conv_scaling_factor.reshape(-1)
 
         self.weight_integer = self.weight_function(
-                weight, self.weight_bit, self.percentile_mode, conv_scaling_factor)
+                weight, self.weight_bit, conv_scaling_factor)
 
         bias_scaling_factor = conv_scaling_factor * pre_act_scaling_factor
 
         if bias is not None:
-            # self.bias_integer?
             bias_integer = self.weight_function(bias, 
-                self.bias_bit, self.percentile_mode, bias_scaling_factor.reshape([-1])).type(torch.double)
+                self.bias_bit, bias_scaling_factor.reshape([-1])).type(torch.double)
         else:
             bias_integer = None
 
@@ -314,36 +317,38 @@ class QuantConv1d(Module):
             conv = F.conv1d(x, weight=self.weight, bias=self.bias, 
                     stride=self.stride, padding=self.padding, dilation=self.dilation, groups=self.groups)
 
+            # if BN is folded
             if self.bn is not None:
                 conv = self.bn(conv)
+            # if BN is not folded
             return conv, None
         
         assert self.quant_mode == 'symmetric'
 
-        if self.bn is None or not self.fix_bn :
-
+        if self.bn is None or not self.fix_bn:
             weight = self.weight.data.detach()
             bias = None if self.bias is None else self.bias.data.detach()
             conv_output, correct_scaling_factor = self.int_conv(weight, bias, x, pre_act_scaling_factor)
             
+            # if BN is not folded
             if self.bn is None:
                 return conv_output, correct_scaling_factor
             
+            # if BN is folded but not fixed - must update BN statistics
             assert self.bn is not None and not self.fix_bn
             batch_mean = torch.mean(conv_output, dim=(0, 2))
             batch_var = torch.var(conv_output, dim=(0, 2))
 
-
-            if self.update_bn:
-                # update running mean and vairance
-                self.bn.running_mean = self.bn.running_mean.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_mean
-                self.bn.running_var = self.bn.running_var.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_var
+            # update running mean and vairance
+            self.bn.running_mean = self.bn.running_mean.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_mean
+            self.bn.running_var = self.bn.running_var.detach() * (1 - self.bn.momentum) + self.bn.momentum * batch_var
 
             output_factor = self.bn.weight.view(1, -1, 1) / torch.sqrt(self.bn.running_var + self.bn.eps).view(1, -1, 1)
             output = output_factor * (conv_output - self.bn.running_mean.view(1, -1, 1)) + self.bn.bias.view(1, -1, 1)
 
             return output, output_factor * correct_scaling_factor
 
+        # BN is folded and fixed - should not update BN statistics
         assert self.bn is not None and self.fix_bn
         running_std = torch.sqrt(self.bn.running_var.detach() + self.bn.eps)
         scale_factor = self.bn.weight / running_std
@@ -355,13 +360,11 @@ class QuantConv1d(Module):
             scaled_bias = torch.zeros_like(self.bn.running_mean)
         scaled_bias = (scaled_bias - self.bn.running_mean.detach()) * scale_factor + self.bn.bias
 
-        # TODO: do refactoring 
         weight = scaled_weight.data.detach()
         bias = scaled_bias.data.detach()
         conv_output, correct_scaling_factor = self.int_conv(weight, bias, x, pre_act_scaling_factor)
         
         return conv_output, correct_scaling_factor
-
 
 
 class QuantLinear(Module):
@@ -375,7 +378,7 @@ class QuantLinear(Module):
     bias_bit : int, default None
         Bitwidth for quantized bias.
     per_channel : bool, default False
-        Whether to use channel-wise quantization.
+        Whether to use channelwise quantization.
     quant_mode : 'none' or 'symmetric', default 'none'
         The mode for quantization. 'none' for no quantization.
     """
@@ -391,7 +394,6 @@ class QuantLinear(Module):
         self.bias_bit = bias_bit
         self.quantize_bias = (False if bias_bit is None else True)
         self.quant_mode = quant_mode
-        self.percentile_mode = False
 
         if self.quant_mode == "none":
             pass
@@ -433,7 +435,6 @@ class QuantLinear(Module):
         if self.quant_mode == 'none':
             return F.linear(x, weight=self.weight, bias=self.bias), None
 
-    	# x / prev_act_scaling_factor = int
         assert self.quant_mode == 'symmetric', \
                 "unsupported quant mode: {}".format(quant_mode)
 
@@ -454,8 +455,7 @@ class QuantLinear(Module):
         self.fc_scaling_factor = symmetric_linear_quantization_params(
                 self.weight_bit, w_min, w_max, self.per_channel)
         self.weight_integer = self.weight_function(
-                self.weight, self.weight_bit, self.percentile_mode, 
-                self.fc_scaling_factor)
+                self.weight, self.weight_bit, self.fc_scaling_factor)
 
         bias_scaling_factor = self.fc_scaling_factor * prev_act_scaling_factor
 

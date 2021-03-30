@@ -8,43 +8,10 @@ import decimal
 from decimal import Decimal
 import time
 
-def get_percentile_min_max(input, lower_percentile, upper_percentile, output_tensor=False):
-    """
-    Calculate the percentile max and min values in a given tensor
-    
-    Parameters:
-    ----------
-    input: tensor
-        the tensor to calculate percentile max and min
-    lower_percentile: float
-        if 0.1, means we return the value of the smallest 0.1% value in the tensor as percentile min
-    upper_percentile: float
-        if 99.9, means we return the value of the largest 0.1% value in the tensor as percentile max
-    output_tensor: bool, default False
-        if True, this function returns tensors, otherwise it returns values
-    """
-    input_length = input.shape[0]
-
-    lower_index = round(input_length * (1 - lower_percentile * 0.01))
-    upper_index = round(input_length * upper_percentile * 0.01)
-
-    upper_bound = torch.kthvalue(input, k=upper_index).values
-
-    if lower_percentile == 0:
-        lower_bound = upper_bound * 0
-        # lower_index += 1
-    else:
-        lower_bound = -torch.kthvalue(-input, k=lower_index).values
-
-    if not output_tensor:
-        lower_bound = lower_bound.item()
-        upper_bound = upper_bound.item()
-    return lower_bound, upper_bound
-
 
 def linear_quantize(input, scale, zero_point, inplace=False):
     """
-    Quantize single-precision input tensor to integers with the given scaling factor and zeropoint.
+    Quantize single-precision input tensor to integers with the given scaling factor and zero point.
 
     Parameters:
     ----------
@@ -53,19 +20,6 @@ def linear_quantize(input, scale, zero_point, inplace=False):
     zero_pint: shift for quantization
     """
 
-    '''
-    # reshape scale and zeropoint for convolutional weights and activation
-    if len(input.shape) == 4:
-        scale = scale.view(-1, 1, 1, 1)
-        zero_point = zero_point.view(-1, 1, 1, 1)
-    # reshape scale and zeropoint for linear weights
-    elif len(input.shape) == 2:
-        scale = scale.view(-1, 1)
-        zero_point = zero_point.view(-1, 1)
-    else:
-        scale = scale.view(-1)
-        zero_point = zero_point.view(-1)
-    '''
     if inplace:
         input.mul_(1. / scale).add_(zero_point).round_()
         return input
@@ -80,8 +34,10 @@ def symmetric_linear_quantization_params(num_bits,
 
     Parameters:
     ----------
+    num_bits: quantization bit width
     saturation_min: lower bound for quantization range
     saturation_max: upper bound for quantization range
+    per_channel: whether or not to apply channelwise quantization
     """
     # in this part, we do not need any gradient computation,
     # in order to enfore this, we put torch.no_grad()
@@ -91,7 +47,6 @@ def symmetric_linear_quantization_params(num_bits,
         if per_channel:
             scale, _ = torch.max(torch.stack([saturation_min.abs(), saturation_max.abs()], dim=1), dim=1)
             scale = torch.clamp(scale, min=1e-8) / n 
-
         else:
             scale = max(saturation_min.abs(), saturation_max.abs())
             scale = torch.clamp(scale, min=1e-8) / n 
@@ -104,11 +59,10 @@ class SymmetricQuantFunction(Function):
     Class to quantize the given floating-point values using symmetric quantization with given range and bitwidth.
     """
     @staticmethod
-    def forward(ctx, x, k, percentile_mode=False, specified_scale=None):
+    def forward(ctx, x, k, specified_scale=None):
         """
         x: floating point tensor to be quantized
         k: quantization bitwidth
-        Note that the current implementation of SymmetricQuantFunction requires pre-calculated scaling factor.
         specified_scale: pre-calculated scaling factor for the tensor x
         """
         
@@ -126,7 +80,6 @@ class SymmetricQuantFunction(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-
         scale = ctx.scale
         if len(grad_output.shape) == 4:
             scale = scale.view(-1, 1, 1, 1)
@@ -212,7 +165,6 @@ class fixedpoint_mul(Function):
                  bit_num, quant_mode, z_scaling_factor, 
                  identity=None, identity_scaling_factor=None):
 
-        #TODO(Sehoon): May require other type of reshape
         if len(pre_act_scaling_factor.shape) == 3:
             reshape = lambda x : x
         else:
@@ -258,14 +210,10 @@ class fixedpoint_mul(Function):
 
                 output = output1 + output
 
-            #if bit_num in [4, 8, 16]:
-            if True: #TODO what is this for?
-                if quant_mode == 'symmetric':
-                    return torch.clamp( output.type(torch.float), -n - 1, n)
-                else:
-                    return torch.clamp( output.type(torch.float), 0, n)
+            if quant_mode == 'symmetric':
+                return torch.clamp( output.type(torch.float), -n - 1, n)
             else:
-                return output.type(torch.float)
+                return torch.clamp( output.type(torch.float), 0, n)
 
     @ staticmethod
     def backward(ctx, grad_output):
