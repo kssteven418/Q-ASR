@@ -131,12 +131,10 @@ class MaskedConv1d(nn.Module):
         quant_mode='none',
         quant_bit=8,
         asymmetric=False,
-        name='',
     ):
         super(MaskedConv1d, self).__init__()
         self.quant_mode = quant_mode
         self.asymmetric = asymmetric
-        self.name = name
 
         if not (heads == -1 or groups == in_channels):
             raise ValueError("Only use heads for depthwise convolutions")
@@ -162,9 +160,8 @@ class MaskedConv1d(nn.Module):
         if self.asymmetric:
             act_quant_bit += 1 # This has the same effect as using the asymmetric quantization w. bias 0
 
-        self.act = QuantAct(act_quant_bit, quant_mode=self.quant_mode, per_channel=False, name=name+'_act')
-        self.conv = QuantConv1d(quant_bit, bias_bit=32, quant_mode=self.quant_mode, 
-                per_channel=True, name=name+'_conv')
+        self.act = QuantAct(act_quant_bit, quant_mode=self.quant_mode, per_channel=False)
+        self.conv = QuantConv1d(quant_bit, bias_bit=32, quant_mode=self.quant_mode, per_channel=True)
         self.conv.set_param(conv)
 
         self.use_mask = use_mask
@@ -344,7 +341,6 @@ class JasperBlock(nn.Module):
         self.se = se
         self.quant_mode = quant_mode
         self.layer_num = layer_num
-        self.name = 'jb%d' % self.layer_num
 
         inplanes_loop = inplanes
         conv = nn.ModuleList()
@@ -373,7 +369,6 @@ class JasperBlock(nn.Module):
                     quant_mode=quant_mode,
                     quant_bit=quant_bit,
                     is_first_layer=(self.layer_num==0 and i==0), # 1st conv of the 1st layer
-                    name=self.name+('_conv%d' % i)
                 )
             )
 
@@ -397,7 +392,6 @@ class JasperBlock(nn.Module):
                 quant_mode=quant_mode,
                 quant_bit=quant_bit,
                 is_first_layer=(self.layer_num==0 and repeat==1),
-                name=self.name+('_conv%d' % (repeat-1))
             )
         )
 
@@ -441,7 +435,6 @@ class JasperBlock(nn.Module):
                         quant_mode=quant_mode,
                         quant_bit=quant_bit,
                         is_first_layer=(self.layer_num==0),
-                        name=self.name+('_res%d' % i)
                     )
                 )
 
@@ -451,7 +444,7 @@ class JasperBlock(nn.Module):
         else:
             self.res = None
 
-        self.res_act =  QuantAct(quant_bit, quant_mode=self.quant_mode, per_channel=False, name=self.name+('_res_act'))
+        self.res_act =  QuantAct(quant_bit, quant_mode=self.quant_mode, per_channel=False)
         self.mout = nn.Sequential(*self._get_act_dropout_layer(drop_prob=dropout, activation=activation))
 
 
@@ -520,7 +513,6 @@ class JasperBlock(nn.Module):
         quant_mode='none',
         quant_bit=8,
         asymmetric=False,
-        name='',
     ):
         use_mask = self.conv_mask
         if use_mask:
@@ -538,7 +530,6 @@ class JasperBlock(nn.Module):
                 quant_mode=quant_mode,
                 quant_bit=quant_bit,
                 asymmetric=asymmetric,
-                name=name,
             )
         else:
             assert quant_mode == 'none', \
@@ -571,7 +562,6 @@ class JasperBlock(nn.Module):
         quant_mode='none',
         quant_bit=8,
         is_first_layer=False,
-        name='',
     ):
         if norm_groups == -1:
             norm_groups = out_channels
@@ -591,7 +581,6 @@ class JasperBlock(nn.Module):
                     quant_mode=quant_mode,
                     quant_bit=quant_bit,
                     asymmetric=(not is_first_layer),
-                    name=name+'_dw',
                 ),
                 self._get_conv(
                     in_channels,
@@ -605,7 +594,6 @@ class JasperBlock(nn.Module):
                     quant_mode=quant_mode,
                     quant_bit=quant_bit,
                     asymmetric=False,
-                    name=name+'_pw',
                 ),
             ]
         else:
@@ -622,7 +610,6 @@ class JasperBlock(nn.Module):
                     quant_mode=quant_mode,
                     quant_bit=quant_bit,
                     asymmetric=(not is_first_layer),
-                    name=name,
                 )
             ]
 
