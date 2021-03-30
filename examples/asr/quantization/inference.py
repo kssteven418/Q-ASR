@@ -66,7 +66,6 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--wer_tolerance", type=float, default=1.0, help="used by test")
     parser.add_argument("--normalize_text", default=True, type=bool, help="Normalize transcripts or not. Set to False for non-English.")
-    parser.add_argument("--store_model", type=str, default=None, help="path to store the model")
     parser.add_argument("--eval_early_stop", type=int, default=None, help="early stop for debugging")
     parser.add_argument("--calib_early_stop", type=int, default=None, help="early stop calibration")
 
@@ -77,82 +76,42 @@ def main():
     parser.add_argument("--act_bit", type=int, default=8, help="quantization bit for activations")
     parser.add_argument("--percentile", type=float, default=None, help="Max/min percentile for outlier handling. e.g., 99.9")
 
-    parser.add_argument("--distill_num_batch", type=int, default=50, help="number of batches for distilled data")
-    parser.add_argument("--distill_train_iter", type=int, default=300, help="training iteration for distilled data generation")
-    parser.add_argument("--distill_batch_size", type=int, default=8)
-    parser.add_argument("--distill_dump", type=str, default=None, help="Pickle dump filename for distilled data")
     parser.add_argument("--distill_load", type=str, default=None, help="Pickle load path for distilled data")
-    parser.add_argument("--distill_lr", type=float, default=0.01, help="Learning rate of data distillation")
-    parser.add_argument("--alpha", type=float, default=0.0, help="regularization constant for distillation") 
-    parser.add_argument("--beta", type=float, default=0.0, help="regularization constant for distillation")
-    parser.add_argument("--loss_criterion", type=str, default=None, 
-            choices=['zeroq', 'zeroq-norm', 'kl', 'hd'], help="Loss criterion")
 
-    parser.add_argument("--distill_only", action='store_true', help="Skip calibration/evaluation after distillation.")
     parser.add_argument("--calib_only", action='store_true', help="Skip evaluation after calibration.")
     args = parser.parse_args()
 
     torch.set_grad_enabled(False)
 
-    if args.store_model is not None and not args.store_model.endswith('.nemo'):
-        raise Exception('--store_model: file name must end with .nemo')
-
     if args.asr_model.endswith('.nemo'):
         logging.info(f"Using local ASR model from {args.asr_model}")
         asr_model = EncDecCTCModel.restore_from(restore_path=args.asr_model)
-        teacher_model = EncDecCTCModel.restore_from(restore_path=args.asr_model)
     else:
         logging.info(f"Using NGC cloud ASR model {args.asr_model}")
         asr_model = EncDecCTCModel.from_pretrained(model_name=args.asr_model)
-        teacher_model = EncDecCTCModel.restore_from(restore_path=args.asr_model)
 
-    for _model in [asr_model, teacher_model]:
-        _model.setup_test_data(
-            test_data_config={
-                'sample_rate': 16000,
-                'manifest_filepath': args.dataset,
-                'labels': asr_model.decoder.vocabulary,
-                'batch_size': args.batch_size,
-                'normalize_transcripts': args.normalize_text,
-                'shuffle': args.shuffle,
-            }
-        )
+    
+    asr_model.setup_test_data(
+        test_data_config={
+            'sample_rate': 16000,
+            'manifest_filepath': args.dataset,
+            'labels': asr_model.decoder.vocabulary,
+            'batch_size': args.batch_size,
+            'normalize_transcripts': args.normalize_text,
+            'shuffle': args.shuffle,
+        }
+    )
 
-    ############################## Distillation #####################################
+    if args.distill_load is not None:
+        print('data loaded from %s' % args.distill_load)
+        with open(args.distill_load, 'rb') as f:
+            distilled_data = pickle.load(f)
+    else:
+        assert args.dynamic, \
+                "synthetic data must be loaded unless running with the dynamic quantization mode"
 
-    file_name = '%s-%s-bs%d-iter%d-lr%.3f-a%.3f.pkl' % \
-            (args.distill_dump, args.loss_criterion, args.distill_num_batch, args.distill_train_iter, args.distill_lr, args.alpha)
-
-    # if dynamic, we can skip distillation
-    if not args.dynamic:
-        teacher_model.set_quant_mode('none') # distable quantization mode for the teacher model
-        torch.set_grad_enabled(True) # enable backward graph generation
-        distill_seqlen = 500
-
-        # if load path for the distilled data is given, skip the data distillation process.
-        if args.distill_load is not None:
-            print('data loaded from %s' % args.distill_load)
-            with open(args.distill_load, 'rb') as f:
-                distilled_data = pickle.load(f)
-        else:
-            print('distillating')
-            distilled_data = get_distill_data(teacher_model.encoder, teacher_model.decoder, batch_size=args.distill_batch_size, 
-                    dim=64, seqlen=distill_seqlen, num_batch=args.distill_num_batch, train_iter=args.distill_train_iter,
-                    alpha=args.alpha, beta=args.beta, loss_criterion=args.loss_criterion, lr=args.distill_lr)
-            # if dump path is given, dump the distilled data
-            if args.distill_dump is not None:
-                print('Distilled data dumped as ', file_name)
-                with open(file_name, 'wb') as f:
-                    pickle.dump([x.cpu() for x in distilled_data], f)
-
-    if args.distill_only:
-        sys.exit()
-
-    if args.store_model is not None:
-        asr_model.save_to(args.store_model)
-        print('model stored at %s' % args.store_model)
-        sys.exit()
-
+    synthetic_batch_size, _, synthetic_seqlen = distilled_data[0].shape
+    
     ############################## Calibration #####################################
 
     torch.set_grad_enabled(False) # disable backward graph generation
@@ -174,7 +133,7 @@ def main():
     if not args.dynamic:
         print('calibrating')
         qm.calibrate(asr_model)
-        length = torch.tensor([distill_seqlen] * args.distill_batch_size).cuda()
+        length = torch.tensor([synthetic_seqlen] * synthetic_batch_size).cuda()
         for batch_idx, inputs in enumerate(distilled_data):
             if args.calib_early_stop is not None and  batch_idx == args.calib_early_stop:
                 break
