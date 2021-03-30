@@ -40,8 +40,9 @@ except ImportError:
     def autocast(enabled=None):
         yield
 
-
 can_gpu = torch.cuda.is_available()
+if not can_gpu:
+    raise Exception("Current implementation only supports GPU")
 
 
 def main():

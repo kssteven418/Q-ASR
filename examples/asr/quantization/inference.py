@@ -39,9 +39,9 @@ except ImportError:
     def autocast(enabled=None):
         yield
 
-
 can_gpu = torch.cuda.is_available()
-
+if not can_gpu:
+    raise Exception("Current implementation only supports GPU")
 
 def main():
     parser = ArgumentParser()
@@ -145,9 +145,7 @@ def main():
     for i, test_batch in enumerate(progress_bar):
         if i == args.eval_early_stop:
             break
-
-        if can_gpu:
-            test_batch = [x.cuda().float() for x in test_batch]
+        test_batch = [x.cuda().float() for x in test_batch]
         with autocast():
             log_probs, encoded_len, greedy_predictions = asr_model(
                 input_signal=test_batch[0], input_signal_length=test_batch[1]
