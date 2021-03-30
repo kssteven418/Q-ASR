@@ -56,7 +56,7 @@ def _get_random_data(batch_size=32, dim=64, seqlen=500):
                              num_workers=32)
     return data_loader
 
-def kl_loss(bn_mean, bn_std, tmp_mean, tmp_std):
+def _kl_loss(bn_mean, bn_std, tmp_mean, tmp_std):
     """
     Compute KL divergence given two Gaussian distributions whose statistics
     are (bn_meanm, bn_std) and (tmp_mean, tmp_std), respectively.
