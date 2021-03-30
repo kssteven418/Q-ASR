@@ -85,4 +85,4 @@ python inference.py --asr_model QuartzNet15x5Base-En --dataset {DIR}/dev_clean.j
 ```
 Similarly, `{DIR}/dev_clean.json` is the manifest file (generated from the preprocessing step) for the target evaluation dataset.
 Please use the flag `-h` to see the details for the input arguments.
-We can also use `--dynamic` flag to perform dynamic quantization, instead of using `--load` flag to load the synthetic dataset.
+You can also use `--dynamic` flag to perform dynamic quantization, instead of using `--load` flag to load the synthetic dataset.
