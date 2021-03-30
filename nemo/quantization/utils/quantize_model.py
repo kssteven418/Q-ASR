@@ -63,13 +63,13 @@ def freeze_model(model, freeze_list):
                 freeze_model(mod, freeze_list)
 
 def evaluate(model):
-    "Evaluation mode - fix all operations"
+    """Evaluation mode - fix all operations"""
     freeze_model(model, list_all)
 
 def train(model):
-    "Train mode - unfix all operations"
+    """Train mode - unfix all operations"""
     freeze_model(model, [])
 
 def calibrate(model):
-    "Calibration mode - only unfix QuantAct"
+    """Calibration mode - only unfix QuantAct"""
     freeze_model(model, [QuantConv1d, QuantLinear])
