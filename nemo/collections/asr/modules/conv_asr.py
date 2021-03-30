@@ -191,14 +191,6 @@ class ConvASREncoder(NeuralModule, Exportable):
         self.encoder = torch.nn.Sequential(*encoder_layers)
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
-    def bn_folding(self):
-        for l in self.encoder_layers:
-            l.bn_folding()
-
-        #import sys
-        #sys.exit()
-
-    #@typecheck()
     def forward(self, audio_signal, length=None, audio_signal_scaling_factor=None):
         s_input, length = [(audio_signal, audio_signal_scaling_factor)], length
         for i, layer in enumerate(self.encoder_layers):
@@ -213,7 +205,12 @@ class ConvASREncoder(NeuralModule, Exportable):
 
         return s_input_last, length, s_input_last_scaling_factor
 
+    def bn_folding(self):
+        for l in self.encoder_layers:
+            l.bn_folding()
+
     def set_quant_bit(self, quant_bit, mode='all'):
+        assert mode in ['all', 'weight', 'act']
         for l in self.encoder_layers:
             l.set_quant_bit(quant_bit, mode)
 
@@ -266,12 +263,10 @@ class ConvASRDecoder(NeuralModule, Exportable):
         qconv.set_param(conv)
 
         self.decoder_layers = torch.nn.Sequential(
-            #torch.nn.Conv1d(self._feat_in, self._num_classes, kernel_size=1, bias=True)
             qconv
         )
         self.apply(lambda x: init_weights(x, mode=init_mode))
 
-    #@typecheck()
     def forward(self, encoder_output, encoder_output_scaling_factor=None):
         output, output_scaling_factor = self.act(encoder_output, encoder_output_scaling_factor)
         
@@ -301,6 +296,7 @@ class ConvASRDecoder(NeuralModule, Exportable):
         Exportable._prepare_for_export(self)
 
     def set_quant_bit(self, quant_bit, mode='all'):
+        assert mode in ['all', 'weight', 'act']
         if mode in ['all', 'act']:
             self.act.activation_bit = quant_bit
         for l in self.decoder_layers:

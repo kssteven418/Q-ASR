@@ -93,7 +93,6 @@ class EncDecCTCModel(ASRModel, Exportable):
         self.global_rank = 0
         self.world_size = 1
         self.local_rank = 0
-        self.enable_spec_augmentation = False
         if trainer is not None:
             self.global_rank = (trainer.node_rank * trainer.num_gpus) + trainer.local_rank
             self.world_size = trainer.num_nodes * trainer.num_gpus
@@ -398,7 +397,7 @@ class EncDecCTCModel(ASRModel, Exportable):
                 input_signal=input_signal, length=input_signal_length,
             )
 
-        if self.spec_augmentation is not None and (self.training or self.enable_spec_augmentation):
+        if self.spec_augmentation is not None and self.training:
             processed_signal = self.spec_augmentation(input_spec=processed_signal)
 
         encoded, encoded_len, encoded_scaling_factor = self.encoder(audio_signal=processed_signal, length=processed_signal_length)
