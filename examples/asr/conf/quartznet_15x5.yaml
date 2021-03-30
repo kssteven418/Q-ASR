@@ -9,7 +9,7 @@ model:
                    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "'"]
 
   train_ds:
-    manifest_filepath: /rscratch/data/librispeech/train_clean_100_short.json
+    manifest_filepath: ???
     sample_rate: 16000
     labels: *labels
     batch_size: 32
@@ -21,7 +21,7 @@ model:
     tarred_shard_strategy: "scatter"
 
   validation_ds:
-    manifest_filepath: /rscratch/data/librispeech/dev_clean.json
+    manifest_filepath: ???
     sample_rate: 16000
     labels: *labels
     batch_size: 32
@@ -243,11 +243,11 @@ model:
       last_epoch: -1
 
 trainer:
-  gpus: 1 # number of gpus
+  gpus: 0 # number of gpus
   max_epochs: 5
   max_steps: null # computed at runtime if not set
   num_nodes: 1
-  #accelerator: ddp
+  accelerator: ddp
   accumulate_grad_batches: 1
   checkpoint_callback: False  # Provided by exp_manager
   logger: False  # Provided by exp_manager
