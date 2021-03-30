@@ -55,10 +55,6 @@ def main():
     parser.add_argument("--dump_path", type=str, default=None, help="path to dump the synthetic data")
     parser.add_argument("--dump_prefix", type=str, default='syn', help="prefix for the filename of the dumped synthetic data")
     parser.add_argument("--lr", type=float, default=0.01, help="Learning rate for the synthetic data generation")
-    parser.add_argument("--alpha", type=float, default=0.0, help="regularization constant for distillation") #TODO
-    parser.add_argument("--beta", type=float, default=0.0, help="regularization constant for distillation") #TODO
-    parser.add_argument("--loss_criterion", type=str, default=None, 
-            choices=['zeroq', 'zeroq-norm', 'kl', 'hd'], help="Loss criterion") #TODO
 
     args = parser.parse_args()
 
