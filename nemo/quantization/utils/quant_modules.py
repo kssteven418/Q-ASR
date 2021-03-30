@@ -262,9 +262,6 @@ class QuantConv1d(Module):
         """
         self.fix_bn = False
 
-    def set_update_bn(self, update: bool):
-        self.update_bn = update
-
     def bn_folding(self, bn):
         self.bn = bn
 

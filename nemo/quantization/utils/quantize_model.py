@@ -3,6 +3,9 @@ from nemo.quantization.utils.quant_modules import *
 list_all = [QuantAct, QuantLinear, QuantConv1d]
 
 def set_percentile(model, percentile: float):
+    """
+    Recursively set the percentile of QuantAct ops.
+    """
     if type(model) in list_all:
         if type(model) == QuantAct:
             model.set_percentile(percentile)
@@ -18,41 +21,29 @@ def set_percentile(model, percentile: float):
             if isinstance(mod, nn.Module):
                 set_percentile(mod, percentile)
 
-def set_dynamic(model, update: bool):
+def set_dynamic(model, dynamic: bool):
+    """
+    Recursively set the dynamic quantization mode of QuantAct ops.
+    """
     if type(model) in list_all:
         if type(model) == QuantAct:
-            model.dynamic = update
+            model.dynamic = dynamic
     elif type(model) == nn.Sequential:
         for n, m in model.named_children():
-            set_dynamic(m, update)
+            set_dynamic(m, dynamic)
     elif type(model) == nn.ModuleList:
         for n in model:
-            set_dynamic(n, update)
+            set_dynamic(n, dynamic)
     else:
         for attr in dir(model):
             mod = getattr(model, attr)
             if isinstance(mod, nn.Module):
-                set_dynamic(mod, update)
-
-def set_update_bn(model, update: bool):
-    if type(model) in list_all:
-        if type(model) == QuantConv1d:
-            model.set_update_bn(update)
-    elif type(model) == nn.Sequential:
-        for n, m in model.named_children():
-            set_update_bn(m, update)
-    elif type(model) == nn.ModuleList:
-        for n in model:
-            set_update_bn(n, update)
-    else:
-        for attr in dir(model):
-            mod = getattr(model, attr)
-            if isinstance(mod, nn.Module):
-                set_update_bn(mod, update)
+                set_dynamic(mod, dynamic)
 
 def freeze_model(model, freeze_list):
     """
-    freeze the activation range. Resursively invokes layer.fix()
+    Freezes operations in `freeze_list` by a resursively invocation of ops.fix() for 
+    the ops in `freeze_list` and ops.unfix() for the remaining ops.
     """
     if type(model) in list_all:
         if type(model) in freeze_list:
@@ -72,13 +63,13 @@ def freeze_model(model, freeze_list):
                 freeze_model(mod, freeze_list)
 
 def evaluate(model):
+    "Evaluation mode - fix all operations"
     freeze_model(model, list_all)
 
 def train(model):
+    "Train mode - unfix all operations"
     freeze_model(model, [])
 
 def calibrate(model):
+    "Calibration mode - only unfix QuantAct"
     freeze_model(model, [QuantConv1d, QuantLinear])
-
-def fix_act(model):
-    freeze_model(model, [QuantAct])
