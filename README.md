@@ -11,14 +11,9 @@ conda create -n qasr python=3.8
 conda activate qasr
 ```
 
-2. Install requirements
+2. Install NeMo (Q-ASR) 
 ```
-conda install pytorch torchvision torchaudio cudatoolkit=10.2 -c pytorch
 pip install Cython
-```
-
-3. Install NeMo (Q-ASR) 
-```
 git clone https://github.com/kssteven418/Q-ASR.git
 cd Q-ASR
 ./reinstall.sh
