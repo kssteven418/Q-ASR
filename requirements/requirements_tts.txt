@@ -1,6 +1,6 @@
-matplotlib
-pypinyin
-attrdict
-pystoi
-pesq
-g2p_en
+matplotlib==3.3.3
+pypinyin==0.40.0
+attrdict==2.0.1
+pystoi==0.3.3
+pesq==0.0.2
+g2p_en==2.1.0

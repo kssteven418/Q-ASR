@@ -1,11 +1,11 @@
 black==19.10b0
 isort[requirements] < 5
-parameterized
-pytest
-pytest-runner
-ruamel.yaml
-sphinx
-sphinxcontrib-bibtex
-wrapt
-wget
-wandb
+parameterized==0.7.4
+pytest==6.2.1
+pytest-runner==5.2
+ruamel.yaml==0.16.12
+sphinx==3.3.1
+sphinxcontrib-bibtex==2.0.0
+wrapt==1.12.1
+wget==3.2
+wandb==0.10.12
