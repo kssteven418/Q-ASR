@@ -1,4 +1,4 @@
-# Q-ASR: Integer-only Zero-shot Quantization for Efficient Speech Recognition
+# Integer-only Zero-shot Quantization for Efficient Speech Recognition
 ---
 <img width="900" alt="zsq_horiz3" src="https://user-images.githubusercontent.com/50283958/113030937-a29bef80-917d-11eb-8f33-65fd5b076d0e.png">
 
